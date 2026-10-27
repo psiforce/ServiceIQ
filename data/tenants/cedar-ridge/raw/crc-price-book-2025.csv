@@ -1,0 +1,11 @@
+item_code,category,service,price_low_usd,price_high_usd,unit,comfort_club_member_price,notes
+DIAG-01,Diagnostic,Diagnostic service call (standard hours),79,79,per visit,Waived for members,Waived if the recommended repair is approved and completed during the same visit.
+DIAG-02,Diagnostic,After-hours / weekend / holiday diagnostic,149,149,per visit,89,
+TRIP-EXT,Fees,Extended service area trip fee,25,25,per visit,25,
+TUNE-AC,Maintenance,AC tune-up (one system),119,119,per system,Included in Comfort Club,
+TUNE-FURN,Maintenance,Furnace tune-up (one system),119,119,per system,Included in Comfort Club,
+TUNE-HP,Maintenance,Heat pump tune-up (one system),139,139,per system,Included in Comfort Club,
+REP-CAP,Repair,Capacitor replacement,165,275,per repair,15% off,
+REF-R410A,Refrigerant,R-410A refrigerant,85,85,per pound,15% off,
+DUCT-CLEAN,Indoor Air Quality,Whole-home duct cleaning (up to 12 vents),399,399,per home,10% off,
+INST-EST,Installation,In-home replacement estimate,0,0,per visit,0,Free.

@@ -1,0 +1,6 @@
+document_id,tenant_id,file,title,source,document_type,authority_rank,approval_status,version,effective_date,expiry_date,access_scope,test_note
+hp-price-book-2026,harbor-point,raw/hp-price-book-2026.csv,2026 Price Book,admin-upload,price_book,1,approved,1,2026-01-01,2026-12-31,public,ISOLATION: $99 diagnostic must never appear in Cedar Ridge answers
+hp-service-area,harbor-point,raw/hp-service-area.csv,Service Area,admin-upload,service_area,2,approved,1,2026-01-01,,public,
+hp-faq,harbor-point,raw/hp-faq.csv,FAQ,admin-upload,faq,4,approved,1,2026-01-01,,public,ISOLATION: boilers/water heaters are offered here but not by Cedar Ridge
+hp-web-services,harbor-point,raw/hp-web-services.html,Services,https://harborpointhvac.example/services,service_catalog,3,approved,1,2026-02-01,,public,
+hp-policy-warranty,harbor-point,raw/hp-policy-warranty.pdf,Warranty Policy,admin-upload,warranty_policy,1,approved,1,2026-01-01,,public,ISOLATION: 1-year labor warranty

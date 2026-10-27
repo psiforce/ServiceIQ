@@ -1,0 +1,8 @@
+item_code,category,service,price_low_usd,price_high_usd,unit,notes
+HP-DIAG,Diagnostic,Diagnostic service call,99,99,per visit,Not waived with repair.
+HP-DIAG-AH,Diagnostic,After-hours diagnostic,199,199,per visit,
+HP-TUNE-AC,Maintenance,AC tune-up,139,139,per system,
+HP-TUNE-FURN,Maintenance,Furnace tune-up,139,139,per system,
+HP-BOILER,Maintenance,Boiler tune-up,189,189,per system,Harbor Point services gas boilers.
+HP-WH-FLUSH,Maintenance,Water heater flush,119,119,per unit,
+HP-DUCT,Indoor Air Quality,Duct cleaning (up to 10 vents),399,399,per home,

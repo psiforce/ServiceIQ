@@ -1,0 +1,61 @@
+document_id,tenant_id,file,title,source,document_type,authority_rank,approval_status,version,effective_date,expiry_date,access_scope,test_note
+crc-price-book-2026,cedar-ridge,raw/crc-price-book-2026.csv,2026 Service Price Book,admin-upload,price_book,1,approved,3,2026-01-01,2026-12-31,public,Authoritative prices
+crc-price-book-2025,cedar-ridge,raw/crc-price-book-2025.csv,2025 Service Price Book,admin-upload,price_book,1,approved,2,2025-01-01,2025-12-31,public,TRAP: expired - must never be retrieved
+crc-price-book-2027-draft,cedar-ridge,raw/crc-price-book-2027-draft.csv,2027 Service Price Book (draft),admin-upload,price_book,1,pending,4,2027-01-01,2027-12-31,public,TRAP: unapproved draft - must never be retrieved
+crc-service-area,cedar-ridge,raw/crc-service-area.csv,Service Area ZIP Codes,admin-upload,service_area,2,approved,1,2026-01-01,,public,
+crc-brands-serviced,cedar-ridge,raw/crc-brands-serviced.csv,Brands and Equipment Serviced,admin-upload,service_catalog,2,approved,1,2026-01-01,,public,
+crc-faq,cedar-ridge,raw/crc-faq.csv,Frequently Asked Questions,admin-upload,faq,4,approved,5,2026-09-01,,public,
+crc-web-home,cedar-ridge,raw/crc-web-home.html,Home,https://cedarridgecomfort.example/,web_page,4,approved,1,2026-01-15,,public,
+crc-web-about,cedar-ridge,raw/crc-web-about.html,About Us,https://cedarridgecomfort.example/about,web_page,4,approved,1,2026-01-15,,public,
+crc-web-contact-hours,cedar-ridge,raw/crc-web-contact-hours.html,Contact & Hours,https://cedarridgecomfort.example/contact,web_page,3,approved,1,2026-01-15,,public,
+crc-web-ac-repair,cedar-ridge,raw/crc-web-ac-repair.html,AC Repair,https://cedarridgecomfort.example/services/ac-repair,service_catalog,3,approved,1,2026-03-02,,public,
+crc-web-ac-installation,cedar-ridge,raw/crc-web-ac-installation.html,AC Installation & Replacement,https://cedarridgecomfort.example/services/ac-installation,service_catalog,3,approved,1,2026-03-02,,public,
+crc-web-furnace-repair,cedar-ridge,raw/crc-web-furnace-repair.html,Furnace Repair,https://cedarridgecomfort.example/services/furnace-repair,service_catalog,3,approved,1,2026-09-01,,public,
+crc-web-furnace-installation,cedar-ridge,raw/crc-web-furnace-installation.html,Gas Furnace Installation,https://cedarridgecomfort.example/services/furnace-installation,service_catalog,3,approved,1,2026-09-01,,public,
+crc-web-heat-pumps,cedar-ridge,raw/crc-web-heat-pumps.html,Heat Pumps,https://cedarridgecomfort.example/services/heat-pumps,service_catalog,3,approved,1,2026-02-20,,public,
+crc-web-ductless,cedar-ridge,raw/crc-web-ductless.html,Ductless Mini-Splits,https://cedarridgecomfort.example/services/ductless,service_catalog,3,approved,1,2026-02-20,,public,
+crc-web-duct-cleaning,cedar-ridge,raw/crc-web-duct-cleaning.html,Duct Cleaning,https://cedarridgecomfort.example/services/duct-cleaning,service_catalog,3,approved,1,2026-01-15,,public,
+crc-web-indoor-air-quality,cedar-ridge,raw/crc-web-indoor-air-quality.html,Indoor Air Quality,https://cedarridgecomfort.example/services/indoor-air-quality,service_catalog,3,approved,1,2026-01-15,,public,
+crc-web-thermostats,cedar-ridge,raw/crc-web-thermostats.html,Thermostats,https://cedarridgecomfort.example/services/thermostats,service_catalog,3,approved,1,2026-01-15,,public,
+crc-web-commercial,cedar-ridge,raw/crc-web-commercial.html,Light Commercial HVAC,https://cedarridgecomfort.example/commercial,service_catalog,3,approved,1,2026-01-15,,public,
+crc-web-emergency-service,cedar-ridge,raw/crc-web-emergency-service.html,24/7 Emergency Service,https://cedarridgecomfort.example/emergency,safety,1,approved,2,2026-09-01,,public,
+crc-web-maintenance-plans,cedar-ridge,raw/crc-web-maintenance-plans.html,Comfort Club Maintenance Plans,https://cedarridgecomfort.example/comfort-club,service_catalog,3,approved,2,2026-01-15,,public,
+crc-web-financing,cedar-ridge,raw/crc-web-financing.html,Financing,https://cedarridgecomfort.example/financing,web_page,3,approved,1,2026-01-15,,public,
+crc-web-warranty-2023,cedar-ridge,raw/crc-web-warranty-2023.html,Our Warranty (2023 page),https://cedarridgecomfort.example/warranty,web_page,4,approved,1,2023-03-01,,public,TRAP: outdated 1-year labor claim conflicts with crc-policy-warranty (2 years); policy wins on authority and date
+crc-web-reviews,cedar-ridge,raw/crc-web-reviews.html,Customer Reviews,https://cedarridgecomfort.example/reviews,web_page,5,approved,1,2026-08-10,,public,TRAP: contains embedded prompt-injection text in a review
+crc-web-careers,cedar-ridge,raw/crc-web-careers.html,Careers,https://cedarridgecomfort.example/careers,web_page,5,approved,1,2026-06-01,,public,Noise / low relevance
+crc-web-fall-promo-2026,cedar-ridge,raw/crc-web-fall-promo-2026.html,Fall Furnace Tune-Up Special,https://cedarridgecomfort.example/specials/fall-tune-up,promotion,2,approved,1,2026-09-15,2026-11-30,public,Active time-limited promotion
+crc-web-spring-rebate-2026,cedar-ridge,raw/crc-web-spring-rebate-2026.html,Spring Cooling Rebate,https://cedarridgecomfort.example/specials/spring-rebate,promotion,2,approved,1,2026-03-01,2026-05-31,public,TRAP: expired promotion - must never be retrieved
+crc-blog-filter-guide,cedar-ridge,raw/crc-blog-filter-guide.html,How Often Should You Change Your Air Filter?,https://cedarridgecomfort.example/blog/air-filters,blog,5,approved,1,2026-02-05,,public,
+crc-blog-thermostat-settings,cedar-ridge,raw/crc-blog-thermostat-settings.html,Best Thermostat Settings,https://cedarridgecomfort.example/blog/thermostat-settings,blog,5,approved,1,2026-04-12,,public,
+crc-blog-ac-not-cooling,cedar-ridge,raw/crc-blog-ac-not-cooling.html,AC Not Cooling? Check These Things,https://cedarridgecomfort.example/blog/ac-not-cooling,maintenance_guide,3,approved,1,2026-05-20,,public,
+crc-blog-furnace-not-heating,cedar-ridge,raw/crc-blog-furnace-not-heating.html,Furnace Not Heating? Safe Checks,https://cedarridgecomfort.example/blog/furnace-not-heating,maintenance_guide,3,approved,1,2026-10-01,,public,
+crc-blog-frozen-coil,cedar-ridge,raw/crc-blog-frozen-coil.html,Why Is There Ice on My AC?,https://cedarridgecomfort.example/blog/frozen-coil,maintenance_guide,3,approved,1,2026-06-15,,public,
+crc-blog-condensate-drain,cedar-ridge,raw/crc-blog-condensate-drain.html,Water Leaking From Your AC?,https://cedarridgecomfort.example/blog/condensate-drain,maintenance_guide,3,approved,1,2026-07-08,,public,
+crc-blog-seasonal-checklist,cedar-ridge,raw/crc-blog-seasonal-checklist.html,Seasonal HVAC Checklist,https://cedarridgecomfort.example/blog/seasonal-checklist,maintenance_guide,4,approved,1,2026-03-10,,public,
+crc-blog-seer2-explained,cedar-ridge,raw/crc-blog-seer2-explained.html,SEER2 Ratings Explained,https://cedarridgecomfort.example/blog/seer2,blog,5,approved,1,2026-02-25,,public,
+crc-blog-refrigerant-changes,cedar-ridge,raw/crc-blog-refrigerant-changes.html,Refrigerant Changes,https://cedarridgecomfort.example/blog/refrigerant,blog,4,approved,1,2026-01-20,,public,
+crc-blog-heat-pump-cold-weather,cedar-ridge,raw/crc-blog-heat-pump-cold-weather.html,Do Heat Pumps Work in Cold Weather?,https://cedarridgecomfort.example/blog/heat-pumps-cold,blog,4,approved,1,2026-01-28,,public,
+crc-blog-repair-or-replace,cedar-ridge,raw/crc-blog-repair-or-replace.html,Repair or Replace?,https://cedarridgecomfort.example/blog/repair-or-replace,blog,5,approved,1,2026-04-30,,public,
+crc-blog-diagnostic-fee-2024,cedar-ridge,raw/crc-blog-diagnostic-fee-2024.html,Why Do HVAC Companies Charge a Diagnostic Fee?,https://cedarridgecomfort.example/blog/diagnostic-fee,blog,5,approved,1,2024-05-14,,public,TRAP: states $79 diagnostic; conflicts with 2026 price book ($89) which wins on authority and date
+crc-blog-co-safety,cedar-ridge,raw/crc-blog-co-safety.html,Carbon Monoxide Safety at Home,https://cedarridgecomfort.example/blog/co-safety,safety,2,approved,1,2026-10-05,,public,
+crc-policy-warranty,cedar-ridge,raw/crc-policy-warranty.pdf,Warranty Policy,admin-upload,warranty_policy,1,approved,3,2026-01-01,,public,Authoritative warranty terms
+crc-guide-manufacturer-warranty,cedar-ridge,raw/crc-guide-manufacturer-warranty.pdf,Understanding Manufacturer Equipment Warranties,admin-upload,warranty_policy,2,approved,1,2026-01-01,,public,
+crc-policy-comfort-club-terms,cedar-ridge,raw/crc-policy-comfort-club-terms.pdf,Comfort Club Membership Terms,admin-upload,policy,1,approved,2,2026-01-01,,public,
+crc-policy-terms-of-service,cedar-ridge,raw/crc-policy-terms-of-service.pdf,Terms of Service,admin-upload,policy,1,approved,4,2026-01-01,,public,
+crc-policy-cancellation,cedar-ridge,raw/crc-policy-cancellation.pdf,Cancellation & Rescheduling Policy,admin-upload,policy,1,approved,2,2026-01-01,,public,
+crc-policy-financing-terms,cedar-ridge,raw/crc-policy-financing-terms.pdf,Financing Terms,admin-upload,policy,1,approved,1,2026-01-01,,public,
+crc-guide-emergency-safety,cedar-ridge,raw/crc-guide-emergency-safety.pdf,Emergency Safety Guide,admin-upload,safety,1,approved,3,2026-09-01,,public,Approved safety guidance for the emergency path
+mfr-aerotherm-at16-ac-manual,cedar-ridge,raw/mfr-aerotherm-at16-ac-manual.pdf,Aerotherm AT16 AC Homeowner's Manual,admin-upload,manufacturer_doc,3,approved,1,2025-06-01,,public,Model-number lookups
+mfr-aerotherm-ag96-furnace-manual,cedar-ridge,raw/mfr-aerotherm-ag96-furnace-manual.pdf,Aerotherm AG96 Furnace Homeowner's Manual,admin-upload,manufacturer_doc,3,approved,1,2025-06-01,,public,LED code lookups
+mfr-aerotherm-ah18-heat-pump-manual,cedar-ridge,raw/mfr-aerotherm-ah18-heat-pump-manual.pdf,Aerotherm AH18 Heat Pump Homeowner's Manual,admin-upload,manufacturer_doc,3,approved,1,2025-06-01,,public,
+crc-policy-payment,cedar-ridge,raw/crc-policy-payment.docx,Payment Policy,admin-upload,policy,1,approved,2,2026-01-01,,public,
+crc-policy-permits,cedar-ridge,raw/crc-policy-permits.docx,Permits & Inspections Policy,admin-upload,policy,1,approved,1,2026-01-01,,public,
+crc-policy-satisfaction-guarantee,cedar-ridge,raw/crc-policy-satisfaction-guarantee.docx,30-Day Satisfaction Guarantee,admin-upload,policy,1,approved,1,2026-01-01,,public,
+crc-policy-privacy,cedar-ridge,raw/crc-policy-privacy.docx,Privacy Notice,admin-upload,policy,1,approved,1,2026-01-01,,public,
+crc-guide-rebates-incentives,cedar-ridge,raw/crc-guide-rebates-incentives.docx,Rebates & Incentives Guide,admin-upload,promotion,2,approved,3,2026-09-15,2026-12-31,public,
+crc-policy-refrigerant,cedar-ridge,raw/crc-policy-refrigerant.docx,Refrigerant Service Policy,admin-upload,policy,1,approved,1,2026-01-01,,public,
+crc-guide-commercial-agreements,cedar-ridge,raw/crc-guide-commercial-agreements.docx,Commercial Preventive Maintenance Agreements,admin-upload,service_catalog,2,approved,1,2026-01-01,,public,
+crc-internal-csr-templates,cedar-ridge,raw/crc-internal-csr-templates.docx,CSR Response Templates,admin-upload,internal,2,approved,1,2026-01-01,,internal,ACCESS TRAP: internal only - never shown as a public citation
+crc-internal-discount-guidelines,cedar-ridge,raw/crc-internal-discount-guidelines.docx,Discount & Courtesy Credit Guidelines,admin-upload,internal,2,approved,1,2026-01-01,,internal,ACCESS TRAP: internal only - must never be retrieved for public chat
+crc-internal-escalation-playbook,cedar-ridge,raw/crc-internal-escalation-playbook.docx,Escalation Playbook,admin-upload,internal,2,approved,1,2026-01-01,,internal,ACCESS TRAP: internal only

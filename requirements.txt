@@ -1,0 +1,27 @@
+# Direct dependencies for the ServiceIQ MVP.
+# Exact installed versions are recorded in requirements.lock (pip freeze).
+
+# LLM + embeddings
+openai
+langchain
+langchain-openai
+langchain-community
+
+# Vector store (official SDK used directly so metadata filters stay explicit)
+pinecone
+
+# Document parsing and chunking
+beautifulsoup4
+pymupdf
+python-docx
+tiktoken
+
+# Configuration and CLI
+pydantic-settings
+typer
+
+# Observability
+langsmith
+
+# Testing
+pytest

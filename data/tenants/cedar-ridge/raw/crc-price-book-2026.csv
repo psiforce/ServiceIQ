@@ -1,0 +1,37 @@
+item_code,category,service,price_low_usd,price_high_usd,unit,comfort_club_member_price,notes
+DIAG-01,Diagnostic,Diagnostic service call (standard hours),89,89,per visit,Waived for members,Waived if the recommended repair is approved and completed during the same visit. Standard hours: Mon-Fri 7:00 AM-6:00 PM; Sat 8:00 AM-2:00 PM.
+DIAG-02,Diagnostic,After-hours / weekend / holiday diagnostic,169,169,per visit,99,"Applies before 7:00 AM or after 6:00 PM weekdays, Saturday after 2:00 PM, Sundays and company holidays."
+COM-DIAG,Diagnostic,Commercial diagnostic (standard hours),149,149,per visit,Not applicable,Light commercial rooftop and split systems up to 25 tons.
+TRIP-EXT,Fees,Extended service area trip fee,35,35,per visit,35,Added for ZIP codes listed as Extended in the service area list.
+MISSED-APPT,Fees,Missed appointment / late cancellation fee,49,49,per occurrence,Waived once per membership year,Charged when canceled with less than 24 hours notice or when the technician cannot access the equipment.
+TUNE-AC,Maintenance,AC tune-up (one system),129,129,per system,Included in Comfort Club,21-point cooling inspection and cleaning.
+TUNE-FURN,Maintenance,Furnace tune-up (one system),129,129,per system,Included in Comfort Club,"Gas furnace safety and performance inspection, includes carbon monoxide check."
+TUNE-HP,Maintenance,Heat pump tune-up (one system),149,149,per system,Included in Comfort Club,Covers both heating and cooling modes.
+TUNE-DUAL,Maintenance,AC + furnace tune-up bundle (same visit),219,219,per visit,Included in Comfort Club,One cooling and one heating system at the same address.
+REP-CAP,Repair,Capacitor replacement,185,295,per repair,15% off (Basic) / 20% off (Premium),Price depends on capacitor type (single or dual run).
+REP-CONT,Repair,Contactor replacement,175,275,per repair,15% off (Basic) / 20% off (Premium),
+REP-IGN,Repair,Furnace hot surface igniter replacement,225,375,per repair,15% off (Basic) / 20% off (Premium),
+REP-FLM,Repair,Flame sensor cleaning or replacement,129,249,per repair,15% off (Basic) / 20% off (Premium),Cleaning at the low end; replacement at the high end.
+REP-BLWR,Repair,Blower motor replacement,650,1400,per repair,15% off (Basic) / 20% off (Premium),Range depends on PSC vs. variable-speed ECM motor.
+REP-FANM,Repair,Outdoor condenser fan motor replacement,450,850,per repair,15% off (Basic) / 20% off (Premium),
+REP-DRAIN,Repair,Condensate drain line clearing,149,149,per visit,15% off (Basic) / 20% off (Premium),
+REP-TSTAT,Repair,Programmable thermostat (supplied and installed),249,249,each,15% off (Basic) / 20% off (Premium),
+REP-TSTAT-SMART,Repair,Wi-Fi smart thermostat (supplied and installed),395,395,each,15% off (Basic) / 20% off (Premium),
+REP-TSTAT-CS,Repair,Install customer-supplied thermostat (labor only),149,149,each,15% off (Basic) / 20% off (Premium),No warranty on customer-supplied devices; 2-year labor warranty on the installation work applies.
+REF-LEAK,Refrigerant,Refrigerant leak search,295,295,per visit,15% off (Basic) / 20% off (Premium),Electronic and bubble leak detection. Repair priced separately after diagnosis.
+REF-R410A,Refrigerant,R-410A refrigerant,95,95,per pound,15% off (Basic) / 20% off (Premium),Charged by the pound added.
+REF-R454B,Refrigerant,R-454B refrigerant,125,125,per pound,15% off (Basic) / 20% off (Premium),For newer A2L systems.
+REF-R22,Refrigerant,R-22 refrigerant recharge,,,not offered,Not offered,R-22 recharges are not offered. A replacement consultation is free.
+DUCT-CLEAN,Indoor Air Quality,Whole-home duct cleaning (up to 12 vents),449,449,per home,10% off,Includes supply and return vents and main trunk lines with before/after photos.
+DUCT-VENT,Indoor Air Quality,Additional vent beyond 12,25,25,per vent,10% off,
+DUCT-DRYER,Indoor Air Quality,Dryer vent cleaning (add-on to duct cleaning),129,129,per home,10% off,
+IAQ-UV,Indoor Air Quality,UV air purifier (supplied and installed),795,795,each,10% off,
+IAQ-MEDIA,Indoor Air Quality,Media air cleaner (supplied and installed),650,650,each,10% off,
+IAQ-HUM,Indoor Air Quality,Whole-home humidifier (supplied and installed),895,895,each,10% off,
+IAQ-DEHUM,Indoor Air Quality,Whole-home dehumidifier (supplied and installed),1850,1850,each,10% off,
+INST-EST,Installation,In-home replacement estimate,0,0,per visit,0,Free. Takes 60-90 minutes. Written quotes are valid for 30 days.
+INST-AC,Installation,Central AC replacement (2-5 ton),5800,11500,per system,Member pricing on quote,Range only. Final price requires an in-home assessment and written quote.
+INST-FURN,Installation,Gas furnace replacement,4200,8900,per system,Member pricing on quote,Range only. Final price requires an in-home assessment and written quote.
+INST-HP,Installation,Heat pump system replacement,7900,15500,per system,Member pricing on quote,Range only. Final price requires an in-home assessment and written quote.
+INST-DUCTLESS,Installation,Ductless mini-split (single zone),3900,6500,per zone,Member pricing on quote,Range only. Final price requires an in-home assessment and written quote.
+PERMIT-ADMIN,Fees,Permit administration fee,45,45,per permit,45,Permit fees charged by the city or county are passed through at cost.

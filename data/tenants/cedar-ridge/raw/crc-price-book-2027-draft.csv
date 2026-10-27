@@ -1,0 +1,6 @@
+item_code,category,service,price_low_usd,price_high_usd,unit,comfort_club_member_price,notes
+DIAG-01,Diagnostic,Diagnostic service call (standard hours),95,95,per visit,Waived for members,DRAFT - pending owner approval. Do not publish.
+DIAG-02,Diagnostic,After-hours / weekend / holiday diagnostic,185,185,per visit,109,DRAFT - pending owner approval.
+TUNE-AC,Maintenance,AC tune-up (one system),139,139,per system,Included in Comfort Club,DRAFT
+TUNE-FURN,Maintenance,Furnace tune-up (one system),139,139,per system,Included in Comfort Club,DRAFT
+REF-R454B,Refrigerant,R-454B refrigerant,135,135,per pound,15% off (Basic) / 20% off (Premium),DRAFT

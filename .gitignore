@@ -1,0 +1,13 @@
+# Secrets
+.env
+*.key
+gcp-*.json
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Office lock files
+~$*

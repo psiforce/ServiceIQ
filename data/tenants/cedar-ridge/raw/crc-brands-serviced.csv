@@ -1,0 +1,22 @@
+brand,equipment_types,repair_and_maintenance,installation,notes
+Aerotherm,"Central AC, gas furnace, heat pump, air handler",Yes,Yes - authorized dealer,Primary installation brand (fictional manufacturer). Cedar Ridge registers warranties on the customer's behalf.
+Northline,"Ductless mini-split, heat pump",Yes,Yes - authorized dealer,Ductless and cold-climate heat pump installations (fictional manufacturer).
+Carrier,"Central AC, gas furnace, heat pump",Yes,No,Repair and maintenance of existing equipment only.
+Bryant,"Central AC, gas furnace, heat pump",Yes,No,
+Trane,"Central AC, gas furnace, heat pump",Yes,No,
+American Standard,"Central AC, gas furnace, heat pump",Yes,No,
+Lennox,"Central AC, gas furnace, heat pump",Yes,No,Some proprietary communicating controls may require parts lead time.
+Rheem,"Central AC, gas furnace, heat pump",Yes,No,
+Ruud,"Central AC, gas furnace, heat pump",Yes,No,
+Goodman,"Central AC, gas furnace, heat pump",Yes,No,
+Amana,"Central AC, gas furnace, heat pump",Yes,No,
+Daikin,"Central AC, gas furnace, heat pump, ductless",Yes,No,
+York,"Central AC, gas furnace, heat pump",Yes,No,
+Heil,"Central AC, gas furnace",Yes,No,
+Mitsubishi Electric,Ductless mini-split,Yes,No,
+Fujitsu,Ductless mini-split,Yes,No,
+Any brand,Geothermal heat pump,No,No,Not serviced. Referral available on request.
+Any brand,Oil furnace,No,No,Not serviced.
+Any brand,Boiler / hydronic radiant heating,No,No,Not serviced.
+Any brand,Window or portable air conditioner,No,No,Not serviced.
+Any brand,Water heater,No,No,Not serviced. Cedar Ridge does not offer plumbing or water heater services.
