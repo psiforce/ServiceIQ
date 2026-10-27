@@ -11,3 +11,6 @@ __pycache__/
 
 # Office lock files
 ~$*
+
+# Generated reports
+reports/

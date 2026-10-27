@@ -133,3 +133,56 @@ def clean(
     before_total = sum(s.chars_before for s in stats.values())
     after_total = sum(s.chars_after for s in stats.values())
     console.print(f"{before_total:,} -> {after_total:,} characters ({1 - after_total / before_total:.0%} removed)")
+
+
+@app.command()
+def chunk(
+    tenant: str = typer.Option("all", help="Tenant ID, or 'all'."),
+    doc: str = typer.Option(None, help="Print every chunk of one document ID."),
+):
+    """M3: split cleaned documents into chunks; writes reports/chunks.csv."""
+    import csv
+    import statistics
+    from collections import Counter
+
+    from serviceiq.ingestion.pipeline import prepare_chunks
+
+    settings = get_settings()
+    chunks = prepare_chunks(settings, tenant)
+    if doc:
+        selected = [c for c in chunks if c.metadata["document_id"] == doc]
+        if not selected:
+            raise typer.BadParameter(f"unknown document ID: {doc}")
+        for c in selected:
+            m = c.metadata
+            console.rule(f"{m['chunk_id']}  |  {m['token_count']} tokens  |  section: {m['section'] or '-'}")
+            console.print(c.page_content, markup=False, highlight=False)
+        return
+
+    report = PROJECT_ROOT / "reports" / "chunks.csv"
+    report.parent.mkdir(exist_ok=True)
+    with report.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["chunk_id", "tenant_id", "document_id", "document_type", "section", "token_count", "text"])
+        for c in chunks:
+            m = c.metadata
+            writer.writerow([m["chunk_id"], m["tenant_id"], m["document_id"], m["document_type"], m["section"],
+                             m["token_count"], c.page_content])
+
+    tokens = [c.metadata["token_count"] for c in chunks]
+    table = Table(title=f"Chunks by document type ({tenant}), target {settings.chunk_target_tokens} tokens, "
+                        f"overlap {settings.chunk_overlap_tokens}")
+    for col in ["document_type", "documents", "chunks", "avg tokens", "max tokens"]:
+        table.add_column(col)
+    by_type: dict[str, list] = {}
+    for c in chunks:
+        by_type.setdefault(c.metadata["document_type"], []).append(c)
+    for doc_type, items in sorted(by_type.items()):
+        t = [c.metadata["token_count"] for c in items]
+        table.add_row(doc_type, str(len({c.metadata["document_id"] for c in items})), str(len(items)),
+                      str(round(statistics.mean(t))), str(max(t)))
+    console.print(table)
+    buckets = Counter(min(n // 100 * 100, 500) for n in tokens)
+    console.print("Token distribution: " + "  ".join(f"{b}-{b + 99}: {buckets[b]}" for b in sorted(buckets)))
+    console.print(f"{len(chunks)} chunks | min {min(tokens)} | median {statistics.median(tokens):.0f} | "
+                  f"max {max(tokens)} tokens | written to {report.relative_to(PROJECT_ROOT)}")

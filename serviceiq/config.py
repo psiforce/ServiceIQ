@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     langsmith_tracing: bool = False
     langsmith_project: str = "serviceiq-dev"
 
+    # Chunking (requirements: ~500 tokens with 75-token overlap; tuned in M10)
+    chunk_target_tokens: int = 500
+    chunk_overlap_tokens: int = 75
+
     # Clock used for effective/expiry filtering; pinned so evaluations are repeatable
     serviceiq_as_of_date: date = date(2026, 10, 26)
 
