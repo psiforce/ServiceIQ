@@ -214,3 +214,62 @@ def index_stats():
                   f"{stats.total_vector_count} vectors")
     for name, ns in sorted(stats.namespaces.items()):
         console.print(f"  namespace {name}: {ns.vector_count} vectors")
+
+
+@app.command()
+def search(
+    query: str,
+    tenant: str = typer.Option("cedar-ridge", help="Tenant namespace to search."),
+    top_k: int = typer.Option(10, help="Number of chunks to return."),
+):
+    """M5: semantic search with tenant, approval, date and access filters."""
+    from serviceiq.retrieval.retriever import Retriever
+
+    results = Retriever(get_settings()).search(query, tenant, top_k=top_k)
+    table = Table(title=f"'{query}' in {tenant}")
+    for col in ["#", "score", "chunk_id", "type", "section", "text"]:
+        table.add_column(col, no_wrap=col in {"chunk_id", "score"}, overflow="fold")
+    for i, c in enumerate(results, 1):
+        snippet = " ".join(c.text.split("\n\n", 1)[-1].split())[:160]
+        table.add_row(str(i), f"{c.score:.3f}", c.chunk_id, c.metadata["document_type"], c.metadata["section"],
+                      snippet)
+    console.print(table)
+
+
+@app.command("eval-retrieval")
+def eval_retrieval(
+    split: str = typer.Option("dev", help="dev, heldout or all."),
+    tenant: str = typer.Option("cedar-ridge", help="Tenant the golden set belongs to."),
+    k: int = typer.Option(5, help="Recall is measured on the top k chunks."),
+):
+    """M5: Recall@k, Hit@k and MRR on the golden questions; writes reports/retrieval_<split>.csv."""
+    from serviceiq.evaluation.datasets import load_golden
+    from serviceiq.evaluation.retrieval_eval import evaluate_retrieval, write_details
+    from serviceiq.retrieval.retriever import Retriever
+
+    settings = get_settings()
+    retriever = Retriever(settings)
+    report = evaluate_retrieval(retriever, load_golden(DATA_DIR, split), tenant, DATA_DIR,
+                                settings.serviceiq_as_of_date, k=k)
+    out = PROJECT_ROOT / "reports" / f"retrieval_{split}.csv"
+    write_details(report, out)
+
+    table = Table(title=f"Retrieval quality - {split} split ({len(report.results)} questions, "
+                        f"{len(report.scored)} with labeled sources)")
+    for col in ["category", "questions", f"Recall@{k}", f"Hit@{k}", "MRR"]:
+        table.add_column(col)
+    categories = sorted({r.question.category for r in report.scored})
+    for cat in categories:
+        rows = [r for r in report.scored if r.question.category == cat]
+        table.add_row(cat, str(len(rows)), f"{report.mean('recall', rows):.0%}", f"{report.mean('hit', rows):.0%}",
+                      f"{report.mean('reciprocal_rank', rows):.2f}")
+    table.add_row("[bold]overall[/bold]", str(len(report.scored)), f"[bold]{report.mean('recall'):.0%}[/bold]",
+                  f"{report.mean('hit'):.0%}", f"{report.mean('reciprocal_rank'):.2f}")
+    console.print(table)
+    target_ok = report.mean("recall") >= 0.90
+    console.print(f"Target Recall@5 >= 90%: [{'green' if target_ok else 'yellow'}]"
+                  f"{'met' if target_ok else 'not met yet'}[/]")
+    console.print(f"Leaks (draft/expired/internal/other-tenant documents retrieved): "
+                  f"[{'red' if report.leaks else 'green'}]{len(report.leaks)}[/]")
+    cost = retriever.embedding_tokens / 1_000_000 * 0.02
+    console.print(f"Details: {out.relative_to(PROJECT_ROOT)} | query embedding cost ${cost:.5f}")
