@@ -1,0 +1,8 @@
+{
+  "tenant_id": "harbor-point",
+  "company_name": "Harbor Point Heating & Air",
+  "office_phone": "(555) 017-3300",
+  "emergency_phone": null,
+  "business_hours": "Monday-Friday 8:00 AM-5:00 PM",
+  "escalation_email": "office@harborpointhvac.example"
+}

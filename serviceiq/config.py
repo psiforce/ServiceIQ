@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr
     openai_embedding_model: str = "text-embedding-3-small"
 
+    # Chat models (answer model chosen by evaluation in M10)
+    guard_model: str = "gpt-4.1-mini"
+    answer_model: str = "gpt-4.1-mini"
+
     # Pinecone
     pinecone_api_key: SecretStr
     pinecone_index_name: str = "serviceiq-dev"

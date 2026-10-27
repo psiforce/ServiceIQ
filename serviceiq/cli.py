@@ -273,3 +273,62 @@ def eval_retrieval(
                   f"[{'red' if report.leaks else 'green'}]{len(report.leaks)}[/]")
     cost = retriever.embedding_tokens / 1_000_000 * 0.02
     console.print(f"Details: {out.relative_to(PROJECT_ROOT)} | query embedding cost ${cost:.5f}")
+
+
+@app.command()
+def guard(message: str, tenant: str = typer.Option("cedar-ridge", help="Tenant whose contact details to use.")):
+    """M6: show the input guard's decision for one message."""
+    from serviceiq.guardrails.guard import check_message
+    from serviceiq.llm import openai_client
+    from serviceiq.tenants import load_profile
+
+    settings = get_settings()
+    result = check_message(message, load_profile(DATA_DIR, tenant), openai_client(settings), settings.guard_model)
+    color = {"emergency": "red", "answer": "green"}.get(result.action, "yellow")
+    console.print(f"Action: [bold {color}]{result.action}[/]"
+                  + (f"  (emergency: {result.emergency_type}, priority {result.escalation_priority})"
+                     if result.emergency_type else ""))
+    console.print(f"Injection suspected: {result.injection_suspected} | PII found: {sorted(result.pii_types) or '-'}")
+    console.print(f"Logged as: {result.redacted_text}", markup=False)
+    for reason in result.reasons:
+        console.print(f"  - {reason}", markup=False)
+    if result.message:
+        console.rule("Response shown to the customer")
+        console.print(result.message, markup=False)
+    if result.usage:
+        console.print(f"Cost: ${result.usage.cost:.5f}")
+
+
+@app.command("eval-guard")
+def eval_guard():
+    """M6: run all golden and adversarial messages through the guard; writes reports/guard_eval.csv."""
+    import csv
+
+    from serviceiq.evaluation.guard_eval import run_guard_eval
+    from serviceiq.llm import openai_client
+
+    settings = get_settings()
+    cases, usage = run_guard_eval(DATA_DIR, openai_client(settings), settings.guard_model)
+    out = PROJECT_ROOT / "reports" / "guard_eval.csv"
+    out.parent.mkdir(exist_ok=True)
+    with out.open("w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["case_id", "passed", "expected", "action", "emergency_type", "injection_suspected", "text",
+                    "reasons"])
+        for c in cases:
+            w.writerow([c.case_id, c.passed, "|".join(sorted(c.expected)), c.result.action, c.result.emergency_type,
+                        c.result.injection_suspected, c.text, " / ".join(c.result.reasons)])
+
+    emergencies = [c for c in cases if c.expected == {"emergency"}]
+    others = [c for c in cases if "emergency" not in c.expected]
+    caught = sum(c.result.action == "emergency" for c in emergencies)
+    false_alarms = [c for c in others if c.result.action == "emergency"]
+    failed = [c for c in cases if not c.passed]
+    console.print(f"Emergency recall:      {caught}/{len(emergencies)}")
+    console.print(f"False emergencies:     {len(false_alarms)}/{len(others)}")
+    console.print(f"Overall correct:       {len(cases) - len(failed)}/{len(cases)}")
+    for c in failed:
+        console.print(f"  [yellow]MISS[/] {c.case_id}: expected {sorted(c.expected)}, got {c.result.action}"
+                      f"{' (injection flag missing)' if c.result.action in c.expected else ''} | {c.text}",
+                      highlight=False)
+    console.print(f"Details: {out.relative_to(PROJECT_ROOT)} | {settings.guard_model} cost ${usage.cost:.4f}")

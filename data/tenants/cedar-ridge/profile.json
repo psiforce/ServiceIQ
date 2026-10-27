@@ -1,0 +1,8 @@
+{
+  "tenant_id": "cedar-ridge",
+  "company_name": "Cedar Ridge Comfort Systems",
+  "office_phone": "(555) 014-2200",
+  "emergency_phone": "(555) 014-2299",
+  "business_hours": "Monday-Friday 7:00 AM-6:00 PM and Saturday 8:00 AM-2:00 PM",
+  "escalation_email": "csr@cedarridgecomfort.example"
+}
