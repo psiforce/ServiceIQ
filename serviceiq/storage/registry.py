@@ -5,6 +5,7 @@ expiry dates and retirement are managed here too. The manifests in data/tenants/
 registry once; after that the admin console is the source of truth.
 """
 import re
+import tempfile
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -58,8 +59,21 @@ def current_version(doc: DocumentRecord) -> DocumentVersionRecord | None:
     return approved[-1] if approved and not doc.retired else None
 
 
+def local_path(file_path: str) -> Path:
+    """Where to read a version's file: project files directly; gs:// uploads via a local download cache."""
+    if not file_path.startswith("gs://"):
+        return PROJECT_ROOT / file_path
+    cached = Path(tempfile.gettempdir()) / "serviceiq-docs" / file_path.removeprefix("gs://")
+    if not cached.exists():
+        from google.cloud import storage
+        bucket, _, blob = file_path.removeprefix("gs://").partition("/")
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        storage.Client().bucket(bucket).blob(blob).download_to_filename(str(cached))
+    return cached
+
+
 def entry_for(doc: DocumentRecord, version: DocumentVersionRecord) -> ManifestEntry:
-    return ManifestEntry(document_id=doc.document_id, tenant_id=doc.tenant_id, path=PROJECT_ROOT / version.file_path,
+    return ManifestEntry(document_id=doc.document_id, tenant_id=doc.tenant_id, path=local_path(version.file_path),
                          title=doc.title, source=doc.source, document_type=doc.document_type,
                          authority_rank=doc.authority_rank, approval_status="approved", version=version.version,
                          effective_date=version.effective_date, expiry_date=version.expiry_date,
@@ -91,7 +105,8 @@ def add_document(session: Session, tenant_id: str, title: str, document_type: st
 
 
 def add_version(session: Session, doc: DocumentRecord, filename: str, content: bytes, effective_date: date,
-                expiry_date: date | None, uploaded_by: str, uploads_dir: Path) -> DocumentVersionRecord:
+                expiry_date: date | None, uploaded_by: str, uploads_dir: Path,
+                bucket: str = "") -> DocumentVersionRecord:
     """Store an uploaded file as a new pending version (not searchable until approved)."""
     fmt = Path(filename).suffix.lstrip(".").lower()
     if fmt not in ALLOWED_FORMATS:
@@ -99,10 +114,17 @@ def add_version(session: Session, doc: DocumentRecord, filename: str, content: b
     if expiry_date and expiry_date < effective_date:
         raise ValueError("expiry date is before the effective date")
     number = max((v.version for v in doc.versions), default=0) + 1
-    path = uploads_dir / doc.tenant_id / f"{doc.document_id}-v{number}.{fmt}"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(content)
-    version = DocumentVersionRecord(document_id=doc.document_id, version=number, file_path=_relative(path),
+    name = f"{doc.tenant_id}/{doc.document_id}-v{number}.{fmt}"
+    if bucket:  # durable storage for containers (Cloud Run's local disk is temporary)
+        from google.cloud import storage
+        storage.Client().bucket(bucket).blob(name).upload_from_string(content)
+        file_path = f"gs://{bucket}/{name}"
+    else:
+        path = uploads_dir / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        file_path = _relative(path)
+    version = DocumentVersionRecord(document_id=doc.document_id, version=number, file_path=file_path,
                                     approval_status="pending", effective_date=effective_date.isoformat(),
                                     expiry_date=expiry_date.isoformat() if expiry_date else "", uploaded_by=uploaded_by)
     doc.versions.append(version)

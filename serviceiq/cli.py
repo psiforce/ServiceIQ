@@ -487,7 +487,10 @@ def init_db(rotate: bool = typer.Option(False, help="Issue new widget keys for e
                 console.print(f"{tenant_id}: already provisioned")
     keys_file.parent.mkdir(exist_ok=True)
     keys_file.write_text(json.dumps(keys, indent=2), encoding="utf-8")
-    console.print(f"Database: {settings.database_url}\nDev widget keys saved to {keys_file.relative_to(PROJECT_ROOT)} "
+    from sqlalchemy.engine import make_url
+
+    console.print(f"Database: {make_url(settings.database_url).render_as_string(hide_password=True)}\n"
+                  f"Dev widget keys saved to {keys_file.relative_to(PROJECT_ROOT)} "
                   "(git-ignored; in production give each key to its tenant and keep only the hash).")
 
     # M12: document registry and demo admin accounts

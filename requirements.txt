@@ -24,6 +24,10 @@ fastapi
 uvicorn
 sqlalchemy
 httpx
+psycopg[binary]
+
+# Google Cloud (document uploads on Cloud Storage)
+google-cloud-storage
 
 # Configuration and CLI
 pydantic-settings

@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     retention_days: int = 90          # conversation logs are purged after this many days
     history_turns: int = 3            # earlier turns used to understand follow-ups
     chat_api_url: str = ""            # Streamlit chat: call this API (e.g. http://127.0.0.1:8000); empty = in-process
+    chat_widget_keys: str = ""        # JSON {"tenant": "key"} for the chat in API mode; else var/dev_widget_keys.json
+    uploads_bucket: str = ""          # Cloud Storage bucket for uploaded documents; empty = local var/uploads
 
     # Email notifications for escalations; without SMTP_HOST, emails are written to var/outbox/
     smtp_host: str = ""

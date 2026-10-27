@@ -192,7 +192,8 @@ with views["Knowledge"], sessions()() as session:
                     doc = (registry.add_document(session, tenant_id, title, doc_type, int(authority), access_scope=scope)
                            if target.startswith("➕") else session.get(DocumentRecord, target))
                     version = registry.add_version(session, doc, upload.name, upload.getvalue(), effective, expires,
-                                                   user["username"], PROJECT_ROOT / "var" / "uploads")
+                                                   user["username"], PROJECT_ROOT / "var" / "uploads",
+                                                   bucket=get_settings().uploads_bucket)
                     session.commit()
                     st.session_state["notice"] = f"Uploaded {doc.document_id} v{version.version}; it is pending approval."
                     st.rerun()

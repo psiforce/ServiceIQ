@@ -1,0 +1,18 @@
+# Never ship secrets or local state into the image
+.env
+.env.*
+!.env.example
+var/
+reports/
+.venv/
+.git/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Not needed at runtime
+docs/
+tests/
+data/scripts/
+data/tenants/*/src/
+ServiceIQ_RAG_Requirements.pdf
