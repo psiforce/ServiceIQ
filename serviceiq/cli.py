@@ -299,6 +299,39 @@ def guard(message: str, tenant: str = typer.Option("cedar-ridge", help="Tenant w
         console.print(f"Cost: ${result.usage.cost:.5f}")
 
 
+def print_response(r, show_debug: bool = False) -> None:
+    color = {"answered": "green", "fallback": "yellow", "emergency": "red"}.get(r.status, "yellow")
+    console.print(f"Status: [bold {color}]{r.status}[/]"
+                  + (f"   Escalation: {r.escalation['priority']} - {r.escalation['reason']}" if r.escalation else ""))
+    console.rule("Answer")
+    console.print(r.answer, markup=False, highlight=False)
+    if r.citations:
+        console.rule("Sources")
+        for c in r.citations:
+            where = f" > {c.section}" if c.section else ""
+            console.print(f"[{c.n}] {c.title}{where}  ({c.document_id} v{c.version}, {c.source})",
+                          markup=False, highlight=False)
+            console.print(f"     \"{c.snippet[:110]}...\"", markup=False, highlight=False, style="dim")
+    console.rule()
+    latency = ", ".join(f"{k} {v} ms" for k, v in r.latency_ms.items())
+    console.print(f"Cost ${r.cost_usd:.5f} | {latency} | trace {r.trace_id}")
+    if show_debug:
+        for key, value in r.debug.items():
+            console.print(f"  {key}: {value}", markup=False, highlight=False)
+
+
+@app.command()
+def ask(
+    question: str,
+    tenant: str = typer.Option("cedar-ridge", help="Tenant whose knowledge base answers."),
+    debug: bool = typer.Option(False, help="Show guard reasons, retrieved chunks and grounding checks."),
+):
+    """M7: ask the assistant a question (guard -> retrieve -> grounded answer with citations)."""
+    from serviceiq.assistant import Assistant
+
+    print_response(Assistant(get_settings()).ask(question, tenant), debug)
+
+
 @app.command("eval-guard")
 def eval_guard():
     """M6: run all golden and adversarial messages through the guard; writes reports/guard_eval.csv."""

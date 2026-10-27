@@ -55,7 +55,7 @@ def emergency_message(kind: str, profile: TenantProfile) -> str:
     script = SCRIPTS[kind]
     if profile.emergency_phone:
         when = "Once everyone is safe and responders have cleared the home, " if kind in AFTER_FIRST_RESPONDERS else ""
-        contact = (f"{when}call {profile.company_name}'s 24/7 emergency line at {profile.emergency_phone} "
+        contact = (f"{when}call the {profile.company_name} 24/7 emergency line at {profile.emergency_phone} "
                    f"so a technician can inspect your equipment.")
     else:
         contact = (f"{profile.company_name} does not offer 24/7 emergency service. Call 911 if anyone is in danger; "
