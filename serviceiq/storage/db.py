@@ -29,12 +29,14 @@ def session_factory(engine: Engine) -> sessionmaker[Session]:
     return sessionmaker(engine, expire_on_commit=False)
 
 
-def provision_tenant(session: Session, tenant_id: str, company_name: str, rotate: bool = False) -> str | None:
-    """Create (or rotate the key of) a tenant. Returns the new widget key, shown once; only its hash is stored."""
+def provision_tenant(session: Session, tenant_id: str, company_name: str, rotate: bool = False,
+                     key: str | None = None) -> str | None:
+    """Create (or rotate the key of) a tenant. Returns the new widget key, shown once; only its hash is stored.
+    Pass `key` to use a key generated elsewhere (e.g. one kept in Secret Manager)."""
     tenant = session.get(Tenant, tenant_id)
-    if tenant is not None and not rotate:
+    if tenant is not None and not rotate and (key is None or tenant.widget_key_hash == hash_key(key)):
         return None
-    key = f"wk_{tenant_id}_{secrets.token_urlsafe(24)}"
+    key = key or f"wk_{tenant_id}_{secrets.token_urlsafe(24)}"
     if tenant is None:
         session.add(Tenant(tenant_id=tenant_id, company_name=company_name, widget_key_hash=hash_key(key)))
     else:

@@ -1,0 +1,16 @@
+# Files uploaded to Cloud Build. Never upload secrets or local state.
+.gcloudignore
+.git/
+.env
+.env.*
+var/
+reports/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+docs/
+tests/
+data/scripts/
+data/tenants/*/src/
+ServiceIQ_RAG_Requirements.pdf

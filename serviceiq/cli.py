@@ -475,11 +475,15 @@ def init_db(rotate: bool = typer.Option(False, help="Issue new widget keys for e
     from serviceiq.tenants import load_profile
 
     settings = get_settings()
+    # In the cloud, keys and passwords are generated ahead of time and supplied from Secret Manager
+    given_keys = json.loads(settings.chat_widget_keys) if settings.chat_widget_keys else {}
+    given_passwords = json.loads(settings.admin_passwords.get_secret_value()) if settings.admin_passwords else {}
     keys_file = PROJECT_ROOT / "var" / "dev_widget_keys.json"
     keys = json.loads(keys_file.read_text(encoding="utf-8")) if keys_file.exists() else {}
     with session_factory(make_engine(settings.database_url))() as session:
         for tenant_id in tenant_ids(DATA_DIR):
-            key = provision_tenant(session, tenant_id, load_profile(DATA_DIR, tenant_id).company_name, rotate)
+            key = provision_tenant(session, tenant_id, load_profile(DATA_DIR, tenant_id).company_name, rotate,
+                                   key=given_keys.get(tenant_id))
             if key:
                 keys[tenant_id] = key
                 console.print(f"{tenant_id}: new widget key issued")
@@ -506,10 +510,11 @@ def init_db(rotate: bool = typer.Option(False, help="Issue new widget keys for e
         console.print(f"Registry: {seed_from_manifests(session, DATA_DIR)} document(s) added from manifests")
         for username, tenant_id, role in [("cedar-admin", "cedar-ridge", "admin"), ("cedar-csr", "cedar-ridge", "csr"),
                                           ("harbor-admin", "harbor-point", "admin")]:
-            if session.get(AdminUser, username) is None:
-                password = secrets.token_urlsafe(12)
+            if session.get(AdminUser, username) is None or username in given_passwords:
+                password = given_passwords.get(username) or secrets.token_urlsafe(12)
                 create_admin(session, username, tenant_id, role, password)
-                creds[username] = {"tenant": tenant_id, "role": role, "password": password}
+                if username not in given_passwords:  # supplied passwords are never written out
+                    creds[username] = {"tenant": tenant_id, "role": role, "password": password}
     creds_file.write_text(json.dumps(creds, indent=2), encoding="utf-8")
     console.print(f"Demo admin logins saved to {creds_file.relative_to(PROJECT_ROOT)} (git-ignored).")
 
