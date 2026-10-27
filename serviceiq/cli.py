@@ -1,9 +1,18 @@
 """ServiceIQ command line. Run `python -m serviceiq --help` to list commands."""
-import typer
+import sys
 
-from serviceiq.config import ConfigError, get_settings
+import typer
+from rich.console import Console
+from rich.table import Table
+
+from serviceiq.config import PROJECT_ROOT, ConfigError, get_settings
+
+# Windows consoles default to cp1252; documents contain characters such as "≤" and "°"
+sys.stdout.reconfigure(encoding="utf-8")
 
 app = typer.Typer(help="ServiceIQ RAG MVP command line.", no_args_is_help=True, add_completion=False)
+console = Console()
+DATA_DIR = PROJECT_ROOT / "data"
 
 
 @app.callback()
@@ -55,3 +64,34 @@ def check():
             failed = True
             typer.secho(f"  FAIL  {name:<10} {type(exc).__name__}: {exc}", fg="red")
     raise typer.Exit(1 if failed else 0)
+
+
+@app.command()
+def load(
+    tenant: str = typer.Option("all", help="Tenant ID, or 'all'."),
+    show: str = typer.Option(None, help="Print the loaded text of one document ID."),
+):
+    """M1: load documents from the tenant manifests and show what was extracted."""
+    from serviceiq.ingestion.loaders import load_all
+
+    docs = load_all(DATA_DIR, tenant)
+    if show:
+        match = next((d for d in docs if d.entry.document_id == show), None)
+        if match is None:
+            raise typer.BadParameter(f"unknown document ID: {show}")
+        for part in match.parts:
+            console.rule(f"{show} - part {part.metadata['part']}")
+            console.print(part.page_content, markup=False, highlight=False)
+        console.print(match.parts[0].metadata)
+        return
+
+    table = Table(title=f"Loaded documents ({tenant})")
+    for col in ["document_id", "fmt", "parts", "chars", "type", "status", "effective", "expiry", "scope"]:
+        table.add_column(col, no_wrap=col in {"document_id", "effective", "expiry"}, overflow="fold")
+    for d in docs:
+        e = d.entry
+        table.add_row(e.document_id, e.format, str(len(d.parts)), str(d.char_count), e.document_type,
+                      e.approval_status, e.effective_date, e.expiry_date or "-", e.access_scope)
+    console.print(table)
+    console.print(f"{len(docs)} documents, {sum(len(d.parts) for d in docs)} parts, "
+                  f"{sum(d.char_count for d in docs):,} characters")

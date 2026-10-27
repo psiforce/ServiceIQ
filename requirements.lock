@@ -28,7 +28,6 @@ jsonpatch==1.38
 jsonpointer==3.6
 langchain==1.4.7
 langchain-classic==1.0.8
-langchain-community==0.4.2
 langchain-core==1.7.0
 langchain-openai==1.7.3
 langchain-protocol==0.0.20

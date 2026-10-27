@@ -5,7 +5,7 @@
 openai
 langchain
 langchain-openai
-langchain-community
+# langchain-community is sunset; loaders are implemented in serviceiq/ingestion/loaders.py
 
 # Vector store (official SDK used directly so metadata filters stay explicit)
 pinecone
