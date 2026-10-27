@@ -4,15 +4,14 @@ import csv
 import pytest
 
 from serviceiq.config import PROJECT_ROOT
-from serviceiq.ingestion.loaders import load_all
 from serviceiq.ingestion.manifest import read_manifest
 
 DATA = PROJECT_ROOT / "data"
 
 
 @pytest.fixture(scope="module")
-def docs():
-    return {d.entry.document_id: d for d in load_all(DATA)}
+def docs(loaded_docs):
+    return {d.entry.document_id: d for d in loaded_docs}
 
 
 def test_every_manifest_document_loads(docs):

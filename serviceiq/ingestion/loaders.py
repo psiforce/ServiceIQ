@@ -31,7 +31,7 @@ class LoadedDocument:
         return sum(len(p.page_content) for p in self.parts)
 
 
-def _markdown_table(rows: list[list[str]]) -> str:
+def markdown_table(rows: list[list[str]]) -> str:
     cells = [[(c or "").replace("\n", " ").strip() for c in row] for row in rows if any(row)]
     if not cells:
         return ""
@@ -49,7 +49,7 @@ def _pdf_page_markdown(page: pymupdf.Page) -> str:
     tables = page.find_tables().tables
     table_boxes = [pymupdf.Rect(t.bbox) for t in tables]
     # Read each cell from its own box: Table.extract() can drop the spaces between words
-    items = [(t.bbox[1], _markdown_table([[page.get_textbox(pymupdf.Rect(c)) if c else "" for c in row.cells]
+    items = [(t.bbox[1], markdown_table([[page.get_textbox(pymupdf.Rect(c)) if c else "" for c in row.cells]
                                            for row in t.rows])) for t in tables]
 
     blocks = [b for b in page.get_text("dict")["blocks"] if b["type"] == 0]
@@ -100,7 +100,7 @@ def _load_docx(path: Path) -> list[tuple[int, str]]:
     out = []
     for item in docx.Document(str(path)).iter_inner_content():
         if isinstance(item, docx.table.Table):
-            out.append(_markdown_table([[cell.text for cell in row.cells] for row in item.rows]))
+            out.append(markdown_table([[cell.text for cell in row.cells] for row in item.rows]))
             continue
         text = item.text.strip()
         if not text:

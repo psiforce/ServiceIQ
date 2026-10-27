@@ -95,3 +95,41 @@ def load(
     console.print(table)
     console.print(f"{len(docs)} documents, {sum(len(d.parts) for d in docs)} parts, "
                   f"{sum(d.char_count for d in docs):,} characters")
+
+
+@app.command()
+def clean(
+    tenant: str = typer.Option("all", help="Tenant ID, or 'all'."),
+    doc: str = typer.Option(None, help="Show one document before and after cleaning."),
+):
+    """M2: clean documents (remove boilerplate, HTML to Markdown, hash) and report what changed."""
+    from serviceiq.ingestion.cleaning import clean_documents
+    from serviceiq.ingestion.loaders import load_all
+
+    raw = load_all(DATA_DIR, tenant)
+    cleaned, stats = clean_documents(raw)
+    if doc:
+        before = next((d for d in raw if d.entry.document_id == doc), None)
+        after = next((d for d in cleaned if d.entry.document_id == doc), None)
+        if before is None:
+            raise typer.BadParameter(f"unknown document ID: {doc}")
+        console.rule(f"BEFORE: {doc} ({before.char_count} chars)")
+        console.print(before.parts[0].page_content, markup=False, highlight=False)
+        console.rule(f"AFTER: {doc} ({after.char_count} chars)")
+        console.print(after.parts[0].page_content if after.parts else "(no content)", markup=False, highlight=False)
+        if after.parts:
+            console.print(f"content_hash: {after.parts[0].metadata['content_hash']}")
+        return
+
+    table = Table(title=f"Cleaning report ({tenant})")
+    for col in ["document_id", "fmt", "chars before", "chars after", "removed", "repeated lines", "duplicate parts"]:
+        table.add_column(col, no_wrap=col == "document_id")
+    for d in cleaned:
+        s = stats[d.entry.document_id]
+        removed = 1 - s.chars_after / s.chars_before if s.chars_before else 0
+        table.add_row(d.entry.document_id, d.entry.format, str(s.chars_before), str(s.chars_after), f"{removed:.0%}",
+                      str(s.repeated_lines_removed), ",".join(map(str, s.duplicate_parts)) or "-")
+    console.print(table)
+    before_total = sum(s.chars_before for s in stats.values())
+    after_total = sum(s.chars_after for s in stats.values())
+    console.print(f"{before_total:,} -> {after_total:,} characters ({1 - after_total / before_total:.0%} removed)")
