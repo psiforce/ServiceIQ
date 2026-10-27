@@ -110,7 +110,7 @@ with st.sidebar:
     st.header("ServiceIQ")
     tenant = st.selectbox("Company (tenant)", tenants, format_func=lambda t: profiles[t].company_name)
     show_debug = st.toggle("Show debug details", value=False)
-    if st.button("New conversation", use_container_width=True):
+    if st.button("New conversation", width="stretch"):
         st.session_state.pop(f"history-{tenant}", None)
         st.session_state.pop(f"conversation-{tenant}", None)
         st.rerun()
@@ -157,7 +157,7 @@ if not history and not question:
     st.write("Try one of these:")
     cols = st.columns(2)
     for i, suggestion in enumerate(SUGGESTIONS):
-        if cols[i % 2].button(suggestion, key=f"suggest-{i}", use_container_width=True):
+        if cols[i % 2].button(suggestion, key=f"suggest-{i}", width="stretch"):
             question = suggestion
 
 if question:

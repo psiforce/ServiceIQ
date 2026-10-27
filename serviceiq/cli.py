@@ -195,10 +195,11 @@ def ingest(tenant: str = typer.Option("all", help="Tenant ID, or 'all'.")):
 
     reports = run_ingest(get_settings(), tenant)
     table = Table(title="Ingestion")
-    for col in ["tenant (namespace)", "approved chunks", "embedded", "unchanged", "deleted", "tokens", "cost", "seconds"]:
+    for col in ["tenant (namespace)", "approved chunks", "embedded", "metadata updated", "unchanged", "deleted",
+                "tokens", "cost", "seconds"]:
         table.add_column(col)
     for r in reports:
-        table.add_row(r.tenant_id, str(r.chunks), str(r.embedded), str(r.unchanged), str(r.deleted),
+        table.add_row(r.tenant_id, str(r.chunks), str(r.embedded), str(r.metadata_updated), str(r.unchanged), str(r.deleted),
                       str(r.embedding_tokens), f"${r.embedding_cost:.5f}", f"{r.seconds:.1f}")
     console.print(table)
 
@@ -488,6 +489,38 @@ def init_db(rotate: bool = typer.Option(False, help="Issue new widget keys for e
     keys_file.write_text(json.dumps(keys, indent=2), encoding="utf-8")
     console.print(f"Database: {settings.database_url}\nDev widget keys saved to {keys_file.relative_to(PROJECT_ROOT)} "
                   "(git-ignored; in production give each key to its tenant and keep only the hash).")
+
+    # M12: document registry and demo admin accounts
+    import secrets
+
+    from serviceiq.storage.auth import create_admin
+    from serviceiq.storage.models import AdminUser
+    from serviceiq.storage.registry import seed_from_manifests
+
+    creds_file = PROJECT_ROOT / "var" / "dev_admin_credentials.json"
+    creds = json.loads(creds_file.read_text(encoding="utf-8")) if creds_file.exists() else {}
+    with session_factory(make_engine(settings.database_url))() as session:
+        console.print(f"Registry: {seed_from_manifests(session, DATA_DIR)} document(s) added from manifests")
+        for username, tenant_id, role in [("cedar-admin", "cedar-ridge", "admin"), ("cedar-csr", "cedar-ridge", "csr"),
+                                          ("harbor-admin", "harbor-point", "admin")]:
+            if session.get(AdminUser, username) is None:
+                password = secrets.token_urlsafe(12)
+                create_admin(session, username, tenant_id, role, password)
+                creds[username] = {"tenant": tenant_id, "role": role, "password": password}
+    creds_file.write_text(json.dumps(creds, indent=2), encoding="utf-8")
+    console.print(f"Demo admin logins saved to {creds_file.relative_to(PROJECT_ROOT)} (git-ignored).")
+
+
+@app.command("create-admin")
+def create_admin_command(username: str, tenant: str = typer.Option(...), role: str = typer.Option("admin")):
+    """M12: create or reset an admin console account (prompts for the password)."""
+    from serviceiq.storage.auth import create_admin
+    from serviceiq.storage.db import make_engine, session_factory
+
+    password = typer.prompt("Password (min 10 characters)", hide_input=True, confirmation_prompt=True)
+    with session_factory(make_engine(get_settings().database_url))() as session:
+        create_admin(session, username.lower(), tenant, role, password)
+    console.print(f"Account '{username.lower()}' ({role}) ready for {tenant}.")
 
 
 @app.command()

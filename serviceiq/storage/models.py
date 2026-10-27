@@ -81,6 +81,50 @@ class Feedback(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class AdminUser(Base):
+    """Tenant staff who sign in to the admin console. Roles: admin (everything) or csr (ticket inbox only)."""
+    __tablename__ = "admin_users"
+    username: Mapped[str] = mapped_column(String(100), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.tenant_id"), index=True)
+    role: Mapped[str] = mapped_column(String(16))
+    password_hash: Mapped[str] = mapped_column(String(200))  # pbkdf2_sha256$iterations$salt$hash
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class DocumentRecord(Base):
+    """A knowledge document; its content lives in immutable versions."""
+    __tablename__ = "documents"
+    document_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.tenant_id"), index=True)
+    title: Mapped[str] = mapped_column(String(300))
+    source: Mapped[str] = mapped_column(String(500))
+    document_type: Mapped[str] = mapped_column(String(64))
+    authority_rank: Mapped[int] = mapped_column(Integer)
+    access_scope: Mapped[str] = mapped_column(String(32), default="public")
+    retired: Mapped[bool] = mapped_column(Boolean, default=False)
+    versions: Mapped[list["DocumentVersionRecord"]] = relationship(cascade="all, delete-orphan",
+                                                                   order_by="DocumentVersionRecord.version")
+
+
+class DocumentVersionRecord(Base):
+    __tablename__ = "document_versions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    document_id: Mapped[str] = mapped_column(ForeignKey("documents.document_id"), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    file_path: Mapped[str] = mapped_column(String(500))      # relative to the project root
+    approval_status: Mapped[str] = mapped_column(String(16))  # pending | approved | rejected | superseded
+    effective_date: Mapped[str] = mapped_column(String(10))   # ISO date
+    expiry_date: Mapped[str] = mapped_column(String(10), default="")
+    uploaded_by: Mapped[str | None] = mapped_column(String(100))
+    approved_by: Mapped[str | None] = mapped_column(String(100))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ingested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ingest_seconds: Mapped[float | None] = mapped_column(Float)  # approval -> searchable (freshness SLA)
+    ingest_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class Escalation(Base):
     __tablename__ = "escalations"
     escalation_id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
