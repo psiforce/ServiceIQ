@@ -186,3 +186,31 @@ def chunk(
     console.print("Token distribution: " + "  ".join(f"{b}-{b + 99}: {buckets[b]}" for b in sorted(buckets)))
     console.print(f"{len(chunks)} chunks | min {min(tokens)} | median {statistics.median(tokens):.0f} | "
                   f"max {max(tokens)} tokens | written to {report.relative_to(PROJECT_ROOT)}")
+
+
+@app.command()
+def ingest(tenant: str = typer.Option("all", help="Tenant ID, or 'all'.")):
+    """M4: run load -> clean -> chunk -> embed -> index and sync each tenant's Pinecone namespace."""
+    from serviceiq.ingestion.pipeline import ingest as run_ingest
+
+    reports = run_ingest(get_settings(), tenant)
+    table = Table(title="Ingestion")
+    for col in ["tenant (namespace)", "approved chunks", "embedded", "unchanged", "deleted", "tokens", "cost", "seconds"]:
+        table.add_column(col)
+    for r in reports:
+        table.add_row(r.tenant_id, str(r.chunks), str(r.embedded), str(r.unchanged), str(r.deleted),
+                      str(r.embedding_tokens), f"${r.embedding_cost:.5f}", f"{r.seconds:.1f}")
+    console.print(table)
+
+
+@app.command("index-stats")
+def index_stats():
+    """M4: show vector counts per tenant namespace in Pinecone."""
+    from serviceiq.ingestion.indexing import get_index
+
+    settings = get_settings()
+    stats = get_index(settings).describe_index_stats()
+    console.print(f"Index '{settings.pinecone_index_name}': dimension {stats.dimension}, "
+                  f"{stats.total_vector_count} vectors")
+    for name, ns in sorted(stats.namespaces.items()):
+        console.print(f"  namespace {name}: {ns.vector_count} vectors")

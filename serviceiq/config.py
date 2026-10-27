@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     # Pinecone
     pinecone_api_key: SecretStr
     pinecone_index_name: str = "serviceiq-dev"
+    # Free Starter plan supports serverless on AWS us-east-1; switch to gcp/us-central1 on a paid plan
+    pinecone_cloud: str = "aws"
+    pinecone_region: str = "us-east-1"
+    embedding_dimension: int = 1536  # text-embedding-3-small
 
     # LangSmith (optional until Sprint 2)
     langsmith_api_key: SecretStr | None = None
