@@ -25,7 +25,7 @@ class Settings(BaseSettings):
 
     # Chat models (answer model chosen by evaluation in M10)
     guard_model: str = "gpt-4.1-mini"
-    answer_model: str = "gpt-4.1-mini"
+    answer_model: str = "gpt-5.4-mini"  # chosen in M10: best quality on the eval set at $0.0023/answer
     judge_model: str = "gpt-4.1"  # evaluation grader: stronger than the model it grades
 
     # Pinecone
@@ -44,6 +44,14 @@ class Settings(BaseSettings):
     # Chunking (requirements: ~500 tokens with 75-token overlap; tuned in M10)
     chunk_target_tokens: int = 500
     chunk_overlap_tokens: int = 75
+
+    # Retrieval -> evidence selection (tuned in M10)
+    retrieval_top_k: int = 20        # candidates fetched from Pinecone (M10: 20 + rerank beat 10)
+    evidence_k: int = 6              # chunks given to the answer model (M10: 6 with max 2 per document)
+    max_chunks_per_doc: int = 2      # 0 = no cap; 2 keeps evidence diverse without dropping a second section (M10)
+    # "none" or a Pinecone-hosted reranker. M10: bge-reranker-v2-m3 gave +10 pts Recall@5, but the free plan allows
+    # only 500 rerank requests/month; off by decision (2026-10-27) until a paid plan or self-hosted reranker exists.
+    reranker: str = "none"
 
     # Clock used for effective/expiry filtering; pinned so evaluations are repeatable
     serviceiq_as_of_date: date = date(2026, 10, 26)

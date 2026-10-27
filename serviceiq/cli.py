@@ -381,6 +381,89 @@ def evaluate(
             console.print(f"[yellow]LangSmith upload failed: {type(exc).__name__}: {exc}[/]")
 
 
+@app.command("experiment-retrieval")
+def experiment_retrieval(split: str = typer.Option("dev", help="Golden split to use.")):
+    """M10: compare retrieval strategies (per-document caps, deeper pools, reranking) by Recall@5."""
+    from serviceiq.evaluation.experiments import retrieval_experiment
+
+    with console.status("Retrieving and reranking each question once..."):
+        results = retrieval_experiment(get_settings(), split)
+    baseline = results[0].recall
+    table = Table(title=f"Retrieval experiment ({split} split)")
+    for col in ["variant", "Recall", "vs baseline", "Hit", "rerank latency", "questions with misses"]:
+        table.add_column(col, overflow="fold")
+    for r in results:
+        label = "Recall@5" if r.evidence_k == 5 else f"Recall@{r.evidence_k}"
+        table.add_row(r.name, f"{r.recall:.1%} ({label})", f"{(r.recall - baseline) * 100:+.1f} pts", f"{r.hit:.0%}",
+                      f"{r.rerank_ms:.0f} ms" if r.rerank_ms else "-", f"{len(r.misses)}: {', '.join(r.misses[:8])}"
+                      + ("..." if len(r.misses) > 8 else ""))
+    console.print(table)
+
+
+@app.command()
+def compare(
+    variant: list[str] = typer.Option(..., help='"name" or "name:key=value,key=value" with Settings overrides, '
+                                                 'e.g. "rerank:reranker=bge-reranker-v2-m3,max_chunks_per_doc=1".'),
+    split: str = typer.Option("dev", help="Golden split to use."),
+    langsmith: bool = typer.Option(True, help="Upload each variant as a LangSmith experiment."),
+):
+    """M10: run the end-to-end evaluation for several configurations and write a comparison report."""
+    from datetime import datetime
+
+    from serviceiq.assistant import Assistant
+    from serviceiq.config import load_settings
+    from serviceiq.evaluation.run_eval import TARGETS, evaluate as run_evaluation, upload_to_langsmith, write_report
+
+    rows = []
+    for spec in variant:
+        name, _, overrides_text = spec.partition(":")
+        overrides = dict(item.split("=", 1) for item in overrides_text.split(",") if item)
+        settings = load_settings(**overrides)
+        with console.status(f"[{name}] evaluating...") as status:
+            run = run_evaluation(Assistant(settings), split, judge_model=settings.judge_model, include_extras=False,
+                                 progress=lambda msg: status.update(f"[{name}] {msg}"))
+        report = write_report(run, PROJECT_ROOT / "reports")
+        if langsmith and settings.langsmith_api_key:
+            try:
+                upload_to_langsmith(run, settings.langsmith_api_key.get_secret_value())
+            except Exception as exc:
+                console.print(f"[yellow]LangSmith upload failed for {name}: {exc}[/]")
+        rows.append((name, overrides, run.metrics, report))
+        console.print(f"[{name}] done: correctness {run.metrics['answer_correctness']:.1%}, "
+                      f"critical {run.metrics['critical_errors']}, P95 {run.metrics['p95_latency_ms']} ms")
+
+    def fmt(key, value):
+        if value is None:
+            return "n/a"
+        if key in ("critical_errors",):
+            return str(value)
+        if key.endswith("_ms"):
+            return f"{value} ms"
+        if key == "avg_cost_per_answer":
+            return f"${value:.4f}"
+        return f"{value:.1%}"
+
+    keys = ["faithfulness", "recall_at_5", "answer_correctness", "citation_accuracy", "unsupported_handling",
+            "emergency_handling", "critical_errors", "p50_latency_ms", "p95_latency_ms", "avg_cost_per_answer"]
+    lines = [f"# Configuration comparison ({split} split, {datetime.now():%Y-%m-%d %H:%M})", "",
+             "| Metric | Target | " + " | ".join(name for name, *_ in rows) + " |",
+             "|---|---|" + "---|" * len(rows)]
+    for key in keys:
+        target = TARGETS.get(key)
+        target_text = "-" if target is None else (f"≥ {target[0]:.0%}" if target[1] else
+                                                  (str(target[0]) if key == "critical_errors" else f"≤ {target[0]} ms"))
+        cells = []
+        for _, _, m, _ in rows:
+            met = m["targets_met"].get(key)
+            cells.append(fmt(key, m[key]) + ("" if met is None else (" ✅" if met else " ❌")))
+        lines.append(f"| {key} | {target_text} | " + " | ".join(cells) + " |")
+    lines += ["", "Variants:"] + [f"- **{n}**: {o or 'current settings'} → `{r.name}`" for n, o, _, r in rows]
+    out = PROJECT_ROOT / "reports" / f"compare_{split}_{datetime.now():%Y%m%d-%H%M}.md"
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    console.print("\n".join(lines), markup=False, highlight=False)
+    console.print(f"\nComparison report: {out.relative_to(PROJECT_ROOT)}")
+
+
 @app.command("eval-guard")
 def eval_guard():
     """M6: run all golden and adversarial messages through the guard; writes reports/guard_eval.csv."""

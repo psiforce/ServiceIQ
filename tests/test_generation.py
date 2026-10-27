@@ -150,7 +150,8 @@ def stub_guard(monkeypatch):
 def test_assistant_emergency_short_circuits(monkeypatch):
     from serviceiq.assistant import Assistant
     stub_guard(monkeypatch)
-    settings = SimpleNamespace(data_dir=DATA, guard_model="m", answer_model="m", serviceiq_as_of_date=TODAY)
+    settings = SimpleNamespace(data_dir=DATA, guard_model="m", answer_model="m", serviceiq_as_of_date=TODAY,
+                               reranker="none", retrieval_top_k=10, evidence_k=5, max_chunks_per_doc=0)
     retriever = SimpleNamespace(embedding_tokens=0, search=lambda *a, **k: [])
     response = Assistant(settings, retriever=retriever, client=object()).ask("I smell gas!", "cedar-ridge")
     assert response.status == "emergency" and response.escalation["priority"] == "P1" and not response.citations
@@ -160,7 +161,8 @@ def test_assistant_renumbers_citations(monkeypatch):
     from serviceiq.assistant import Assistant
     stub_guard(monkeypatch)
     stub_replies(monkeypatch, [reply([s("A diagnostic is $89.", 2)])])
-    settings = SimpleNamespace(data_dir=DATA, guard_model="m", answer_model="gpt-4.1-mini", serviceiq_as_of_date=TODAY)
+    settings = SimpleNamespace(data_dir=DATA, guard_model="m", answer_model="gpt-4.1-mini", serviceiq_as_of_date=TODAY,
+                               reranker="none", retrieval_top_k=10, evidence_k=5, max_chunks_per_doc=0)
     chunks = [chunk(0, EVIDENCE[2], "crc-web-thermostats"), chunk(1, EVIDENCE[0])]
     retriever = SimpleNamespace(embedding_tokens=0, search=lambda *a, **k: chunks)
     response = Assistant(settings, retriever=retriever, client=object()).ask("How much is a diagnostic?", "cedar-ridge")

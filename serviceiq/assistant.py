@@ -20,6 +20,7 @@ from serviceiq.conversation import rewrite_question
 from serviceiq.generation.answer import generate_answer
 from serviceiq.guardrails.guard import check_message
 from serviceiq.llm import Usage, openai_client
+from serviceiq.retrieval.evidence import make_reranker, retrieve_evidence
 from serviceiq.retrieval.retriever import RetrievedChunk, Retriever
 from serviceiq.tenants import load_profile
 
@@ -70,14 +71,15 @@ class Assistant:
         self.settings = settings
         self.retriever = retriever or Retriever(settings)
         self.client = client or openai_client(settings)
+        self.reranker = make_reranker(settings)
         self.pool = ThreadPoolExecutor(max_workers=4)
 
     def _resolve_and_retrieve(self, question: str, tenant_id: str, history: list[tuple[str, str]]):
         standalone, follow_up, usage = rewrite_question(self.client, self.settings.guard_model, history, question)
-        return standalone, follow_up, usage, self.retriever.search(standalone, tenant_id, 10)
+        ordered, evidence, _ = retrieve_evidence(self.retriever, self.reranker, self.settings, standalone, tenant_id)
+        return standalone, follow_up, usage, ordered, evidence
 
-    def ask(self, question: str, tenant_id: str, history: list[tuple[str, str]] | None = None,
-            evidence_k: int = 5) -> AssistantResponse:
+    def ask(self, question: str, tenant_id: str, history: list[tuple[str, str]] | None = None) -> AssistantResponse:
         """Answer `question`. `history` holds earlier (question, answer) turns of the same conversation."""
         s = self.settings
         started = time.perf_counter()
@@ -99,9 +101,8 @@ class Assistant:
                                            "total": round((t_guard - started) * 1000)},
                 debug={"guard": verdict.reasons, "logged_question": verdict.redacted_text})
 
-        standalone, follow_up, rewrite_usage, chunks = retrieval.result()
+        standalone, follow_up, rewrite_usage, chunks, evidence = retrieval.result()
         t_retrieval = time.perf_counter()
-        evidence = chunks[:evidence_k]
         gen = generate_answer(self.client, s.answer_model, profile, standalone, evidence, s.serviceiq_as_of_date)
         t_end = time.perf_counter()
         cost += (gen.usage.cost or 0.0) if gen.usage else 0.0

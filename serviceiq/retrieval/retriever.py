@@ -47,11 +47,12 @@ class Retriever:
         self.embedding_tokens = 0  # running total, for cost reporting
 
     def search(self, query: str, tenant_id: str, top_k: int = 10, as_of: date | None = None,
-               scopes: tuple[str, ...] = PUBLIC_SCOPES) -> list[RetrievedChunk]:
+               scopes: tuple[str, ...] = PUBLIC_SCOPES, document_type: str | None = None) -> list[RetrievedChunk]:
         vectors, tokens = self.embed([query])
         self.embedding_tokens += tokens
-        response = self.index.query(
-            vector=vectors[0], top_k=top_k, namespace=tenant_id, include_metadata=True,
-            filter=build_filter(as_of or self.settings.serviceiq_as_of_date, scopes),
-        )
+        flt = build_filter(as_of or self.settings.serviceiq_as_of_date, scopes)
+        if document_type:
+            flt["document_type"] = {"$eq": document_type}
+        response = self.index.query(vector=vectors[0], top_k=top_k, namespace=tenant_id, include_metadata=True,
+                                    filter=flt)
         return [RetrievedChunk(m.id, m.score, m.metadata.get("text", ""), dict(m.metadata)) for m in response.matches]

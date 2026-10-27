@@ -39,7 +39,8 @@ def test_assistant_searches_with_the_rewritten_question(monkeypatch):
     searched = []
     retriever = SimpleNamespace(embedding_tokens=0, search=lambda q, *a, **k: searched.append(q) or [])
     settings = SimpleNamespace(data_dir=PROJECT_ROOT / "data", guard_model="m", answer_model="m",
-                               serviceiq_as_of_date=date(2026, 10, 26))
+                               serviceiq_as_of_date=date(2026, 10, 26),
+                               reranker="none", retrieval_top_k=10, evidence_k=5, max_chunks_per_doc=0)
     response = Assistant(settings, retriever=retriever, client=object()).ask(
         "what about after hours?", "cedar-ridge", history=[("How much is a diagnostic?", "$89 [1]")])
     assert searched == ["How much is an after-hours diagnostic?"]

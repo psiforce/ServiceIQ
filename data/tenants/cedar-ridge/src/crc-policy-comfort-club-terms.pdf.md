@@ -15,7 +15,7 @@ A heat pump counts as one cooling system and one heating system.
 
 - One cooling tune-up (spring) and one heating tune-up (fall) per covered system each membership year
 - No diagnostic fee during standard hours; after-hours diagnostics are $99
-- Repair discount: 15% (Basic) or 20% (Premium). Discounts do not apply to new equipment installations, which receive member pricing on the written quote.
+- Repair discount: 15% (Basic) or 20% (Premium). The repair discount also applies to thermostats supplied and installed by Cedar Ridge. It does not apply to new heating or cooling system installations (furnaces, air conditioners, heat pumps, ductless systems), which receive member pricing on the written quote.
 - 10% off duct cleaning and indoor air quality products
 - Priority scheduling ahead of non-member service calls of the same urgency
 - One missed appointment fee waiver per membership year
