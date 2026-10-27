@@ -33,6 +33,19 @@ def get_assistant():
     return Assistant(get_settings())
 
 
+@st.cache_resource
+def get_api_client(tenant_id: str):
+    """API mode (CHAT_API_URL set): talk to the ServiceIQ API with the tenant's widget key, like a website widget."""
+    if not get_settings().chat_api_url:
+        return None
+    import json
+
+    from serviceiq.api.client import ServiceIQClient
+    from serviceiq.config import PROJECT_ROOT
+    keys = json.loads((PROJECT_ROOT / "var" / "dev_widget_keys.json").read_text(encoding="utf-8"))
+    return ServiceIQClient(get_settings().chat_api_url, keys[tenant_id])
+
+
 def md(text: str) -> str:
     """Streamlit renders $...$ as math; escape dollar signs so prices display as text."""
     return text.replace("$", r"\$")
@@ -55,17 +68,32 @@ def render_assistant(turn: dict, index: int, tenant: str, show_debug: bool) -> N
 
     if r.escalation and r.status != "emergency":
         st.caption(f"Our team can follow up on this ({r.escalation['priority']}: {r.escalation['reason']}).")
+        client = get_api_client(tenant)
         if turn.get("callback_requested"):
-            st.success("Callback requested. Our team will contact you.", icon="📞")
-        elif st.button("Request a callback", key=f"callback-{index}"):
+            st.success(turn.get("callback_message", "Callback requested. Our team will contact you."), icon="📞")
+        elif client is None and st.button("Request a callback", key=f"callback-{index}"):
             feedback.record("callback_request", tenant, r.trace_id, turn["question"], r.status,
                             priority=r.escalation["priority"], reason=r.escalation["reason"])
             turn["callback_requested"] = True
             st.rerun()
+        elif client is not None:
+            with st.expander("Request a callback"), st.form(key=f"callback-form-{index}"):
+                name = st.text_input("Name")
+                phone = st.text_input("Phone")
+                when = st.text_input("Best time to call (optional)")
+                if st.form_submit_button("Send request") and name and phone:
+                    result = client.callback(r.conversation_id, r.message_id, name, phone, when or None)
+                    turn["callback_requested"], turn["callback_message"] = True, result["message"]
+                    st.rerun()
 
     rating = st.feedback("thumbs", key=f"rating-{r.trace_id}")
     if rating is not None and turn.get("rated") != rating:
-        feedback.record("rating", tenant, r.trace_id, turn["question"], r.status, rating="up" if rating else "down")
+        client = get_api_client(tenant)
+        if client is not None:
+            client.feedback(r.message_id, "up" if rating else "down")
+        else:
+            feedback.record("rating", tenant, r.trace_id, turn["question"], r.status,
+                            rating="up" if rating else "down")
         turn["rated"] = rating
 
     if show_debug:
@@ -84,13 +112,32 @@ with st.sidebar:
     show_debug = st.toggle("Show debug details", value=False)
     if st.button("New conversation", use_container_width=True):
         st.session_state.pop(f"history-{tenant}", None)
+        st.session_state.pop(f"conversation-{tenant}", None)
         st.rerun()
     st.divider()
+    st.caption(f"Mode: {'API at ' + settings.chat_api_url if settings.chat_api_url else 'in-process (no API)'}")
     st.caption(f"Pilot demo with synthetic data. Answers use approved documents as of "
                f"{settings.serviceiq_as_of_date:%B %d, %Y}.")
 
 profile = profiles[tenant]
 history: list[dict] = st.session_state.setdefault(f"history-{tenant}", [])
+
+# A person is always one click away (API mode), not only when the assistant flags an escalation
+api_client = get_api_client(tenant)
+conversation_id = st.session_state.get(f"conversation-{tenant}")
+if api_client is not None and conversation_id:
+    with st.sidebar.expander("Talk to a person"):
+        if st.session_state.get(f"callback-done-{conversation_id}"):
+            st.success(st.session_state[f"callback-done-{conversation_id}"], icon="📞")
+        else:
+            with st.form("sidebar-callback"):
+                name = st.text_input("Name")
+                phone = st.text_input("Phone")
+                when = st.text_input("Best time to call (optional)")
+                if st.form_submit_button("Request a callback") and name and phone:
+                    result = api_client.callback(conversation_id, None, name, phone, when or None)
+                    st.session_state[f"callback-done-{conversation_id}"] = result["message"]
+                    st.rerun()
 spent = sum(turn["response"].cost_usd for turn in history)
 st.sidebar.caption(f"Session cost: ${spent:.4f} · {len(history)} question(s)")
 
@@ -122,7 +169,12 @@ if question:
             context = [(t["question"], t["response"].answer) for t in history
                        if t["response"].status in ("answered", "fallback")]
             try:
-                response = get_assistant().ask(question, tenant, history=context)
+                client = get_api_client(tenant)
+                if client is not None:  # the API keeps the conversation history server-side
+                    response = client.chat(question, st.session_state.get(f"conversation-{tenant}"))
+                    st.session_state[f"conversation-{tenant}"] = response.conversation_id
+                else:
+                    response = get_assistant().ask(question, tenant, history=context)
             except Exception as exc:  # keep the chat usable if a service is down
                 st.error("Sorry, something went wrong on our side. Please try again, or call "
                          f"{profile.office_phone}.", icon="⚠️")

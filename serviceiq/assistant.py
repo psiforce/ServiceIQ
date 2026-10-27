@@ -15,10 +15,12 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
+from serviceiq import observability
 from serviceiq.config import Settings
 from serviceiq.conversation import rewrite_question
 from serviceiq.generation.answer import generate_answer
 from serviceiq.guardrails.guard import check_message
+from serviceiq.guardrails.pii import redact
 from serviceiq.llm import Usage, openai_client
 from serviceiq.retrieval.evidence import make_reranker, retrieve_evidence
 from serviceiq.retrieval.retriever import RetrievedChunk, Retriever
@@ -70,9 +72,11 @@ class Assistant:
     def __init__(self, settings: Settings, retriever: Retriever | None = None, client=None):
         self.settings = settings
         self.retriever = retriever or Retriever(settings)
-        self.client = client or openai_client(settings)
+        observability.configure(settings)
+        self.client = client or observability.wrap_client(settings, openai_client(settings))
         self.reranker = make_reranker(settings)
         self.pool = ThreadPoolExecutor(max_workers=4)
+        self.ask = observability.trace_ask(settings, self.ask)  # one LangSmith trace per turn (if enabled)
 
     def _resolve_and_retrieve(self, question: str, tenant_id: str, history: list[tuple[str, str]]):
         standalone, follow_up, usage = rewrite_question(self.client, self.settings.guard_model, history, question)
@@ -86,7 +90,10 @@ class Assistant:
         profile = load_profile(s.data_dir, tenant_id)  # tenant comes from the caller's authentication
         tokens_before = self.retriever.embedding_tokens
         # The guard checks the customer's own words; the rewrite + retrieval run alongside it
-        retrieval = self.pool.submit(self._resolve_and_retrieve, question, tenant_id, history or [])
+        # Privacy: language models only ever see the PII-redacted question; the guard's local rules see the
+        # raw text (that is how card numbers and SSNs are caught and refused).
+        safe_question = redact(question)
+        retrieval = self.pool.submit(self._resolve_and_retrieve, safe_question, tenant_id, history or [])
         verdict = check_message(question, profile, self.client, s.guard_model)
         t_guard = time.perf_counter()
         cost = (verdict.usage.cost or 0.0) if verdict.usage else 0.0

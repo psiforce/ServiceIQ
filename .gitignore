@@ -14,3 +14,6 @@ __pycache__/
 
 # Generated reports
 reports/
+
+# Local runtime data (SQLite database, email outbox, dev widget keys)
+var/

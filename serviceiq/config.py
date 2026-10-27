@@ -53,6 +53,22 @@ class Settings(BaseSettings):
     # only 500 rerank requests/month; off by decision (2026-10-27) until a paid plan or self-hosted reranker exists.
     reranker: str = "none"
 
+    # API service and persistence (M11)
+    database_url: str = f"sqlite:///{(PROJECT_ROOT / 'var' / 'serviceiq.db').as_posix()}"
+    cors_origins: list[str] = ["http://localhost:8501"]
+    rate_limit_per_minute: int = 30   # per widget key
+    retention_days: int = 90          # conversation logs are purged after this many days
+    history_turns: int = 3            # earlier turns used to understand follow-ups
+    chat_api_url: str = ""            # Streamlit chat: call this API (e.g. http://127.0.0.1:8000); empty = in-process
+
+    # Email notifications for escalations; without SMTP_HOST, emails are written to var/outbox/
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: SecretStr | None = None
+    escalation_from_email: str = "serviceiq@localhost"
+    outbox_dir: Path = PROJECT_ROOT / "var" / "outbox"
+
     # Clock used for effective/expiry filtering; pinned so evaluations are repeatable
     serviceiq_as_of_date: date = date(2026, 10, 26)
 

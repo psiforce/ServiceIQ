@@ -464,6 +464,51 @@ def compare(
     console.print(f"\nComparison report: {out.relative_to(PROJECT_ROOT)}")
 
 
+@app.command("init-db")
+def init_db(rotate: bool = typer.Option(False, help="Issue new widget keys for existing tenants.")):
+    """M11: create the database and provision tenants; prints each new widget key once."""
+    import json
+
+    from serviceiq.ingestion.manifest import tenant_ids
+    from serviceiq.storage.db import make_engine, provision_tenant, session_factory
+    from serviceiq.tenants import load_profile
+
+    settings = get_settings()
+    keys_file = PROJECT_ROOT / "var" / "dev_widget_keys.json"
+    keys = json.loads(keys_file.read_text(encoding="utf-8")) if keys_file.exists() else {}
+    with session_factory(make_engine(settings.database_url))() as session:
+        for tenant_id in tenant_ids(DATA_DIR):
+            key = provision_tenant(session, tenant_id, load_profile(DATA_DIR, tenant_id).company_name, rotate)
+            if key:
+                keys[tenant_id] = key
+                console.print(f"{tenant_id}: new widget key issued")
+            else:
+                console.print(f"{tenant_id}: already provisioned")
+    keys_file.parent.mkdir(exist_ok=True)
+    keys_file.write_text(json.dumps(keys, indent=2), encoding="utf-8")
+    console.print(f"Database: {settings.database_url}\nDev widget keys saved to {keys_file.relative_to(PROJECT_ROOT)} "
+                  "(git-ignored; in production give each key to its tenant and keep only the hash).")
+
+
+@app.command()
+def serve(host: str = "127.0.0.1", port: int = 8000, reload: bool = False):
+    """M11: run the ServiceIQ API (docs at http://127.0.0.1:8000/docs)."""
+    import uvicorn
+
+    uvicorn.run("serviceiq.api.main:app", host=host, port=port, reload=reload)
+
+
+@app.command()
+def purge(days: int = typer.Option(None, help="Retention in days (default: RETENTION_DAYS, 90).")):
+    """M11: delete conversations, messages, feedback and tickets older than the retention period."""
+    from serviceiq.storage.db import make_engine, purge_old_conversations, session_factory
+
+    settings = get_settings()
+    with session_factory(make_engine(settings.database_url))() as session:
+        removed = purge_old_conversations(session, days or settings.retention_days)
+    console.print(f"Purged {removed} conversation(s) older than {days or settings.retention_days} days.")
+
+
 @app.command("eval-guard")
 def eval_guard():
     """M6: run all golden and adversarial messages through the guard; writes reports/guard_eval.csv."""

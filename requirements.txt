@@ -19,6 +19,12 @@ tiktoken
 # User interface
 streamlit
 
+# API service and persistence
+fastapi
+uvicorn
+sqlalchemy
+httpx
+
 # Configuration and CLI
 pydantic-settings
 typer
