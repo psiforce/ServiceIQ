@@ -16,6 +16,9 @@ pymupdf
 python-docx
 tiktoken
 
+# User interface
+streamlit
+
 # Configuration and CLI
 pydantic-settings
 typer

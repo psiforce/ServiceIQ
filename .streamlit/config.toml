@@ -1,0 +1,7 @@
+# Run without the first-launch email prompt (it blocks the server until answered)
+[server]
+headless = true
+port = 8501
+
+[browser]
+gatherUsageStats = false
