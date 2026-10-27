@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from serviceiq.config import Settings
+from serviceiq.conversation import rewrite_question
 from serviceiq.generation.answer import generate_answer
 from serviceiq.guardrails.guard import check_message
 from serviceiq.llm import Usage, openai_client
@@ -36,6 +37,7 @@ class Citation:
     section: str
     document_type: str
     snippet: str
+    text: str = field(default="", repr=False)  # full chunk text, used by evaluation
 
 
 @dataclass
@@ -48,6 +50,7 @@ class AssistantResponse:
     cost_usd: float = 0.0
     latency_ms: dict = field(default_factory=dict)
     debug: dict = field(default_factory=dict)  # guard reasons, retrieved chunk IDs, grounding problems
+    context: list[str] = field(default_factory=list, repr=False)  # evidence texts given to the model
 
 
 def _renumber(answer: str, cited: list[int]) -> str:
@@ -59,7 +62,7 @@ def _citation(n: int, chunk: RetrievedChunk) -> Citation:
     m = chunk.metadata
     body = chunk.text.split("\n\n", 1)[-1]
     return Citation(n, m["document_id"], int(m["version"]), m["title"], m["source"], m.get("section", ""),
-                    m["document_type"], " ".join(body.split())[:300])
+                    m["document_type"], " ".join(body.split())[:300], chunk.text)
 
 
 class Assistant:
@@ -69,12 +72,19 @@ class Assistant:
         self.client = client or openai_client(settings)
         self.pool = ThreadPoolExecutor(max_workers=4)
 
-    def ask(self, question: str, tenant_id: str, evidence_k: int = 5) -> AssistantResponse:
+    def _resolve_and_retrieve(self, question: str, tenant_id: str, history: list[tuple[str, str]]):
+        standalone, follow_up, usage = rewrite_question(self.client, self.settings.guard_model, history, question)
+        return standalone, follow_up, usage, self.retriever.search(standalone, tenant_id, 10)
+
+    def ask(self, question: str, tenant_id: str, history: list[tuple[str, str]] | None = None,
+            evidence_k: int = 5) -> AssistantResponse:
+        """Answer `question`. `history` holds earlier (question, answer) turns of the same conversation."""
         s = self.settings
         started = time.perf_counter()
         profile = load_profile(s.data_dir, tenant_id)  # tenant comes from the caller's authentication
         tokens_before = self.retriever.embedding_tokens
-        retrieval = self.pool.submit(self.retriever.search, question, tenant_id, 10)
+        # The guard checks the customer's own words; the rewrite + retrieval run alongside it
+        retrieval = self.pool.submit(self._resolve_and_retrieve, question, tenant_id, history or [])
         verdict = check_message(question, profile, self.client, s.guard_model)
         t_guard = time.perf_counter()
         cost = (verdict.usage.cost or 0.0) if verdict.usage else 0.0
@@ -89,12 +99,13 @@ class Assistant:
                                            "total": round((t_guard - started) * 1000)},
                 debug={"guard": verdict.reasons, "logged_question": verdict.redacted_text})
 
-        chunks = retrieval.result()
+        standalone, follow_up, rewrite_usage, chunks = retrieval.result()
         t_retrieval = time.perf_counter()
         evidence = chunks[:evidence_k]
-        gen = generate_answer(self.client, s.answer_model, profile, question, evidence, s.serviceiq_as_of_date)
+        gen = generate_answer(self.client, s.answer_model, profile, standalone, evidence, s.serviceiq_as_of_date)
         t_end = time.perf_counter()
         cost += (gen.usage.cost or 0.0) if gen.usage else 0.0
+        cost += (rewrite_usage.cost or 0.0) if rewrite_usage else 0.0
         cost += (self.retriever.embedding_tokens - tokens_before) / 1_000_000 * 0.02
 
         escalation = None
@@ -110,7 +121,9 @@ class Assistant:
                         "retrieval_wait": round((t_retrieval - t_guard) * 1000),
                         "generation": round((t_end - t_retrieval) * 1000),
                         "total": round((t_end - started) * 1000)},
-            debug={"guard": verdict.reasons, "injection_suspected": verdict.injection_suspected,
+            context=[c.text for c in evidence],
+            debug={"standalone_question": standalone if follow_up else None,
+                   "guard": verdict.reasons, "injection_suspected": verdict.injection_suspected,
                    "retrieved": [c.chunk_id for c in chunks], "evidence": [c.chunk_id for c in evidence],
                    "attempts": gen.attempts, "grounding_problems": gen.problems,
                    "logged_question": verdict.redacted_text},

@@ -1,0 +1,7 @@
+case_id,turn_1,turn_2,must_contain,notes
+MT01,"How much is a diagnostic visit?","What about after hours?",$169,"Follow-up inherits the topic (diagnostic fee)"
+MT02,"Do you repair Carrier AC units?","Do you install them too?",Aerotherm,"Must say Carrier is repair-only and installs are Aerotherm/Northline"
+MT03,"What does the Comfort Club include?","How much is the Premium one?",$24.95|$279,"Pronoun resolves to the Premium plan"
+MT04,"How long is your warranty on repairs?","And for a new installation?",10-Year|10-year,"Follow-up switches to installation labor guarantee"
+MT05,"Do you service ZIP 45844?","Is there an extra fee for that?",$35,"Fee refers to the extended service area"
+MT06,"Do you offer duct cleaning?","How often should it be done?",3-5 years|3 to 5 years,"'it' resolves to duct cleaning"

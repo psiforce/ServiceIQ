@@ -332,6 +332,55 @@ def ask(
     print_response(Assistant(get_settings()).ask(question, tenant), debug)
 
 
+@app.command()
+def chat(
+    tenant: str = typer.Option("cedar-ridge", help="Tenant whose knowledge base answers."),
+    debug: bool = typer.Option(False, help="Show debug details after each answer."),
+):
+    """Multi-turn conversation in the terminal (follow-ups use earlier turns). Empty line to quit."""
+    from serviceiq.assistant import Assistant
+
+    assistant, history = Assistant(get_settings()), []
+    while True:
+        question = typer.prompt("\nYou", default="", show_default=False).strip()
+        if not question:
+            break
+        response = assistant.ask(question, tenant, history=history)
+        if response.debug.get("standalone_question"):
+            console.print(f"(understood as: {response.debug['standalone_question']})", style="dim")
+        print_response(response, debug)
+        if response.status in ("answered", "fallback"):
+            history.append((question, response.answer))
+
+
+@app.command()
+def evaluate(
+    split: str = typer.Option("dev", help="dev, heldout or all. Keep heldout for acceptance runs."),
+    extras: bool = typer.Option(True, help="Also run the adversarial and multi-turn sets."),
+    langsmith: bool = typer.Option(True, help="Upload results as a LangSmith experiment (needs LANGSMITH_API_KEY)."),
+):
+    """M9: full evaluation (faithfulness, Recall@5, correctness, citations, critical errors, latency, cost)."""
+    from serviceiq.assistant import Assistant
+    from serviceiq.evaluation.run_eval import evaluate as run_evaluation
+    from serviceiq.evaluation.run_eval import upload_to_langsmith, write_report
+
+    settings = get_settings()
+    with console.status("Evaluating...") as status:
+        run = run_evaluation(Assistant(settings), split, judge_model=settings.judge_model, include_extras=extras,
+                             progress=lambda msg: status.update(f"Evaluating... {msg}"))
+    report = write_report(run, PROJECT_ROOT / "reports")
+    console.print(report.read_text(encoding="utf-8").split("## By category")[0], markup=False, highlight=False)
+    total = sum(r.response.cost_usd for r in run.golden) + sum(a["cost"] for a in run.adversarial) \
+        + sum(m["cost"] for m in run.multiturn) + (run.judge_usage.cost or 0)
+    console.print(f"Full report: {report.relative_to(PROJECT_ROOT)} (+ .csv) | total run cost ${total:.3f}")
+    if langsmith and settings.langsmith_api_key:
+        try:
+            name = upload_to_langsmith(run, settings.langsmith_api_key.get_secret_value())
+            console.print(f"LangSmith experiment: {name}")
+        except Exception as exc:
+            console.print(f"[yellow]LangSmith upload failed: {type(exc).__name__}: {exc}[/]")
+
+
 @app.command("eval-guard")
 def eval_guard():
     """M6: run all golden and adversarial messages through the guard; writes reports/guard_eval.csv."""

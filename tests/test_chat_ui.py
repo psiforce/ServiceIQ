@@ -15,7 +15,8 @@ class FakeAssistant:
     def __init__(self, settings):
         pass
 
-    def ask(self, question, tenant_id):
+    def ask(self, question, tenant_id, history=None):
+        FakeAssistant.last_history = history
         if "gas" in question:
             return AssistantResponse(status="emergency", answer="Leave the building now and call 911.",
                                      escalation={"priority": "P1", "reason": "gas"})
@@ -49,6 +50,13 @@ def test_question_shows_answer_with_escaped_price_and_sources(app):
     texts = [m.value for m in at.markdown]
     assert r"A diagnostic visit is \$89 [1]." in texts
     assert any(e.label == "Sources (1)" for e in at.expander)
+
+
+def test_follow_up_receives_conversation_history(app):
+    at, _ = app
+    at.chat_input[0].set_value("How much is a diagnostic visit?").run()
+    at.chat_input[0].set_value("What about after hours?").run()
+    assert FakeAssistant.last_history == [("How much is a diagnostic visit?", "A diagnostic visit is $89 [1].")]
 
 
 def test_emergency_shows_error_banner(app):

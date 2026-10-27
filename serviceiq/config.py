@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     # Chat models (answer model chosen by evaluation in M10)
     guard_model: str = "gpt-4.1-mini"
     answer_model: str = "gpt-4.1-mini"
+    judge_model: str = "gpt-4.1"  # evaluation grader: stronger than the model it grades
 
     # Pinecone
     pinecone_api_key: SecretStr

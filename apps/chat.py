@@ -118,8 +118,11 @@ if question:
         st.markdown(md(question))
     with st.chat_message("assistant"):
         with st.spinner("Checking our approved information..."):
+            # earlier answered turns give context to follow-ups such as "what about after hours?"
+            context = [(t["question"], t["response"].answer) for t in history
+                       if t["response"].status in ("answered", "fallback")]
             try:
-                response = get_assistant().ask(question, tenant)
+                response = get_assistant().ask(question, tenant, history=context)
             except Exception as exc:  # keep the chat usable if a service is down
                 st.error("Sorry, something went wrong on our side. Please try again, or call "
                          f"{profile.office_phone}.", icon="⚠️")
