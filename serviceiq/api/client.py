@@ -1,13 +1,37 @@
-"""Small HTTP client for the ServiceIQ API, used by the Streamlit chat (and usable by tests or scripts)."""
+"""Small HTTP client for the ServiceIQ API, used by the Streamlit chat (and usable by tests or scripts).
+
+When the API is a private Cloud Run service, set CHAT_API_ID_TOKEN=true: each request then carries a Google
+identity token for the API's URL, fetched from the Cloud Run metadata server (no key files involved).
+"""
+import threading
+import time
 from types import SimpleNamespace
 
 import httpx
 
+TOKEN_LIFETIME = 50 * 60  # Google ID tokens last 60 minutes; refresh a little early
+
+
+class _IdTokenAuth(httpx.Auth):
+    def __init__(self, audience: str):
+        self.audience, self.token, self.expires, self.lock = audience, None, 0.0, threading.Lock()
+
+    def auth_flow(self, request):
+        with self.lock:
+            if time.monotonic() > self.expires:
+                import google.auth.transport.requests
+                from google.oauth2 import id_token
+                self.token = id_token.fetch_id_token(google.auth.transport.requests.Request(), self.audience)
+                self.expires = time.monotonic() + TOKEN_LIFETIME
+        request.headers["Authorization"] = f"Bearer {self.token}"
+        yield request
+
 
 class ServiceIQClient:
-    def __init__(self, base_url: str, widget_key: str, timeout: float = 30.0):
-        self.http = httpx.Client(base_url=base_url.rstrip("/"), timeout=timeout,
-                                 headers={"X-Widget-Key": widget_key})
+    def __init__(self, base_url: str, widget_key: str, timeout: float = 30.0, id_token: bool = False):
+        base_url = base_url.rstrip("/")
+        self.http = httpx.Client(base_url=base_url, timeout=timeout, headers={"X-Widget-Key": widget_key},
+                                 auth=_IdTokenAuth(base_url) if id_token else None)
 
     def chat(self, message: str, conversation_id: str | None = None) -> SimpleNamespace:
         r = self.http.post("/v1/chat", json={"message": message, "conversation_id": conversation_id})

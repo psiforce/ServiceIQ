@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     retention_days: int = 90          # conversation logs are purged after this many days
     history_turns: int = 3            # earlier turns used to understand follow-ups
     chat_api_url: str = ""            # Streamlit chat: call this API (e.g. http://127.0.0.1:8000); empty = in-process
+    chat_api_id_token: bool = False   # attach a Google ID token (needed when the API is a private Cloud Run service)
     chat_widget_keys: str = ""        # JSON {"tenant": "key"} for the chat in API mode; else var/dev_widget_keys.json
     admin_passwords: SecretStr | None = None  # JSON {"username": "password"} supplied by init-db in the cloud
     uploads_bucket: str = ""          # Cloud Storage bucket for uploaded documents; empty = local var/uploads

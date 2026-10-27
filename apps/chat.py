@@ -44,7 +44,7 @@ def get_api_client(tenant_id: str):
     from serviceiq.config import PROJECT_ROOT
     raw = get_settings().chat_widget_keys or (PROJECT_ROOT / "var" / "dev_widget_keys.json").read_text(encoding="utf-8")
     keys = json.loads(raw)
-    return ServiceIQClient(get_settings().chat_api_url, keys[tenant_id])
+    return ServiceIQClient(get_settings().chat_api_url, keys[tenant_id], id_token=get_settings().chat_api_id_token)
 
 
 def md(text: str) -> str:
