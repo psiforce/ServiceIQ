@@ -151,7 +151,8 @@ def test_admin_console_login_and_role_scoping(tmp_path, monkeypatch):
         create_admin(s, "boss", "cedar-ridge", "admin", "long enough password")
         create_admin(s, "agent", "cedar-ridge", "csr", "long enough password")
     try:
-        for username, expected_tabs in [("agent", ["Ticket inbox"]), ("boss", ["Ticket inbox", "Knowledge", "Analytics"])]:
+        for username, expected_tabs in [("agent", ["Ticket inbox", "Service requests"]),
+                                        ("boss", ["Ticket inbox", "Service requests", "Knowledge", "Analytics"])]:
             at = AppTest.from_file(str(PROJECT_ROOT / "apps" / "admin.py"), default_timeout=60)
             at.run()
             at.text_input[0].set_value(username)

@@ -5,7 +5,9 @@ from that key only - never from the request body - and every conversation, messa
 scoped to it, so one company can never read or write another company's data.
 
 Endpoints
-  POST /v1/chat         ask a question (optionally continuing a conversation)
+  POST /v1/chat         ask a question or request service (optionally continuing a conversation); with the
+                        agent enabled (M14) it also collects service-request details, takes the contact form
+                        (`contact`) and the customer's confirmation (`confirm`)
   POST /v1/escalations  request a callback (attaches contact details to the handoff ticket)
   POST /v1/feedback     rate an answer
   GET  /health          liveness check (no auth)
@@ -23,7 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from serviceiq.config import Settings, get_settings
-from serviceiq.escalation import handoff_packet, notify
+from serviceiq.escalation import notify, open_ticket
 from serviceiq.guardrails.pii import redact
 from serviceiq.storage.db import make_engine, session_factory, tenant_for_key
 from serviceiq.storage.models import CitationRecord, Conversation, Escalation, Feedback, Message, Tenant
@@ -34,9 +36,21 @@ AUTO_ESCALATE = {"emergency", "escalated"}  # these statuses open a ticket immed
 
 
 # ---------------------------------------------------------------- request / response models
+class ContactIn(BaseModel):
+    """The intake contact form: goes to the field-service platform, never into message text or a model prompt."""
+    name: str = Field(min_length=1, max_length=200)
+    phone: str = Field(min_length=7, max_length=50)
+    email: str = Field(default="", max_length=200)
+    street: str = Field(min_length=1, max_length=300)
+    city: str = Field(default="", max_length=100)
+    zip: str = Field(default="", pattern=r"^(\d{5})?$")
+
+
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
     conversation_id: str | None = None
+    contact: ContactIn | None = None
+    confirm: bool | None = None  # the customer pressed "Confirm" on the request summary
 
 
 class CitationOut(BaseModel):
@@ -64,6 +78,9 @@ class ChatResponse(BaseModel):
     escalation: EscalationOut | None
     trace_id: str
     latency_ms: int
+    stage: str | None = None          # agent: idle | collecting | confirming | submitted | closed
+    needs_contact: bool = False       # agent: show the contact form
+    service_request: dict | None = None
 
 
 class CallbackRequest(BaseModel):
@@ -108,18 +125,24 @@ class RateLimiter:
 
 
 # ---------------------------------------------------------------- application factory
-def create_app(settings: Settings | None = None, assistant=None, engine=None) -> FastAPI:
+def create_app(settings: Settings | None = None, assistant=None, engine=None, agent=None) -> FastAPI:
     settings = settings or get_settings()
     engine = engine or make_engine(settings.database_url)
     sessions = session_factory(engine)
     limiter = RateLimiter(settings.rate_limit_per_minute)
-    state = {"assistant": assistant}
+    state = {"assistant": assistant, "agent": agent}
 
     def get_assistant():
         if state["assistant"] is None:  # created on first use so the API starts fast
             from serviceiq.assistant import Assistant
             state["assistant"] = Assistant(settings)
         return state["assistant"]
+
+    def get_agent():
+        if state["agent"] is None:
+            from serviceiq.agent import Agent
+            state["agent"] = Agent(settings, assistant=state["assistant"])
+        return state["agent"]
 
     app = FastAPI(title="ServiceIQ API", version="0.1.0")
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["GET", "POST"],
@@ -152,15 +175,6 @@ def create_app(settings: Settings | None = None, assistant=None, engine=None) ->
                 turns.append((last_question, m.content))
         return turns[-settings.history_turns:]
 
-    def open_ticket(session: Session, t: Tenant, conversation: Conversation, message_id: str | None, priority: str,
-                    reason: str) -> Escalation:
-        ticket = Escalation(tenant_id=t.tenant_id, conversation_id=conversation.conversation_id,
-                            message_id=message_id, priority=priority, reason=reason)
-        session.add(ticket)
-        session.flush()
-        ticket.handoff_packet = handoff_packet(conversation, {"trigger": reason})
-        return ticket
-
     @app.get("/health")
     def health():
         return {"status": "ok"}
@@ -173,16 +187,24 @@ def create_app(settings: Settings | None = None, assistant=None, engine=None) ->
             conversation = Conversation(tenant_id=t.tenant_id)
             session.add(conversation)
             session.flush()
-        response = get_assistant().ask(body.message, t.tenant_id, history=history(conversation))
+        if settings.agent_enabled:
+            response = get_agent().handle(session, t.tenant_id, conversation.conversation_id, body.message,
+                                          contact=body.contact.model_dump() if body.contact else None,
+                                          confirm=body.confirm, history=history(conversation))
+            stored_answer = response.log_answer  # the request summary is stored without contact details
+        else:
+            response = get_assistant().ask(body.message, t.tenant_id, history=history(conversation))
+            stored_answer = response.answer
 
         session.add(Message(conversation_id=conversation.conversation_id, role="customer",
                             content=redact(body.message)))
-        reply = Message(conversation_id=conversation.conversation_id, role="assistant", content=response.answer,
+        reply = Message(conversation_id=conversation.conversation_id, role="assistant", content=stored_answer,
                         status=response.status, trace_id=response.trace_id,
                         latency_ms=response.latency_ms.get("total"), cost_usd=response.cost_usd,
                         details={k: response.debug.get(k) for k in ("standalone_question", "guard", "evidence",
-                                                                    "attempts", "grounding_problems")}
-                        | {"escalation": response.escalation})
+                                                                    "attempts", "grounding_problems", "extracted")}
+                        | {"escalation": response.escalation,
+                           "service_request": getattr(response, "service_request", None)})
         reply.citations = [CitationRecord(ordinal=c.n, document_id=c.document_id, version=c.version, title=c.title,
                                           section=c.section, source=c.source) for c in response.citations]
         session.add(reply)
@@ -194,8 +216,11 @@ def create_app(settings: Settings | None = None, assistant=None, engine=None) ->
         if response.escalation:
             ticket_id = None
             if response.status in AUTO_ESCALATE:
-                ticket = open_ticket(session, t, conversation, reply.message_id, response.escalation["priority"],
-                                     response.escalation["reason"] or response.status)
+                ticket = open_ticket(session, t.tenant_id, conversation, reply.message_id,
+                                     response.escalation["priority"], response.escalation["reason"] or response.status)
+                if contact := getattr(response, "ticket_contact", None):  # intake hand-off: contact already given
+                    ticket.contact_name, ticket.contact_phone = contact.get("name"), contact.get("phone")
+                    ticket.contact_email = contact.get("email") or None
                 destination = notify(settings, load_profile(settings.data_dir, t.tenant_id), ticket)
                 log.info("ticket %s (%s) notified: %s", ticket.escalation_id, ticket.priority, destination)
                 ticket_id = ticket.escalation_id
@@ -207,7 +232,9 @@ def create_app(settings: Settings | None = None, assistant=None, engine=None) ->
             answer=response.answer, escalation=escalation, trace_id=response.trace_id,
             latency_ms=response.latency_ms.get("total", 0),
             citations=[CitationOut(n=c.n, title=c.title, section=c.section, source=c.source,
-                                   document_id=c.document_id, snippet=c.snippet) for c in response.citations])
+                                   document_id=c.document_id, snippet=c.snippet) for c in response.citations],
+            stage=getattr(response, "stage", None), needs_contact=getattr(response, "needs_contact", False),
+            service_request=getattr(response, "service_request", None))
 
     @app.post("/v1/escalations", response_model=CallbackResponse)
     def request_callback(body: CallbackRequest, t: Tenant = Depends(tenant), session: Session = Depends(db)):
@@ -218,7 +245,7 @@ def create_app(settings: Settings | None = None, assistant=None, engine=None) ->
             source = session.get(Message, body.message_id) if body.message_id else None
             flagged = ((source.details or {}).get("escalation") if source and
                        source.conversation_id == conversation.conversation_id else None) or {}
-            ticket = open_ticket(session, t, conversation, body.message_id, flagged.get("priority", "P3"),
+            ticket = open_ticket(session, t.tenant_id, conversation, body.message_id, flagged.get("priority", "P3"),
                                  flagged.get("reason") or "customer requested a callback")
         ticket.contact_name, ticket.contact_phone = body.name, body.phone
         ticket.contact_email, ticket.preferred_time = body.email, body.preferred_time

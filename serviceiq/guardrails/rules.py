@@ -30,6 +30,13 @@ UNSAFE_REQUEST = re.compile(
     r"\b(bypass|jump(er)?|disable|defeat|override|disconnect)\b.{0,40}"
     r"\b(limit\s+switch|high[- ]limit|safety|pressure\s+switch|flame\s+(sensor|rollout)|rollout|interlock|float\s+switch)\b", I)
 
+# Wants a visit (Phase 2 intake); used when the LLM classifier is unavailable
+SERVICE_REQUEST = re.compile(
+    r"\b(send|get|need|want|have)\s+(a\s+|someone|somebody|a\s+tech\w*|someone\s+to)\b.{0,30}"
+    r"\b(out|over|come|look|check|fix|repair|tech\w*)\b"
+    r"|\b(schedule|book|set\s+up|make)\s+(a\s+|an\s+)?(service|repair|appointment|visit|tune[- ]?up|maintenance|call)\b"
+    r"|\b(can|could)\s+(you|someone|somebody)\s+come\b|\bcome\s+out\b|\bservice\s+call\b", I)
+
 PROMPT_EXTRACTION = re.compile(
     r"\b(system\s+prompt|developer\s+mode|(print|show|reveal|repeat|translate|tell\s+me)\s+(me\s+)?your\s+"
     r"(instructions|prompt|rules|system\s+message))\b", I)
@@ -61,6 +68,10 @@ def emergency_type(text: str) -> str | None:
 
 def is_unsafe_request(text: str) -> bool:
     return bool(UNSAFE_REQUEST.search(text))
+
+
+def wants_service_visit(text: str) -> bool:
+    return bool(SERVICE_REQUEST.search(text))
 
 
 def is_prompt_extraction(text: str) -> bool:

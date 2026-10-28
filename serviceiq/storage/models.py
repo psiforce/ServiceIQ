@@ -2,7 +2,8 @@
 
 Privacy rules: message text is stored PII-redacted. The only personal data stored in clear is the contact
 information a customer explicitly gives when requesting a callback (needed to call them back), and it is
-deleted with the rest of the conversation after the retention period.
+deleted with the rest of the conversation after the retention period. Service requests (Phase 2) hold only a
+reference to the customer record in the field-service platform, never the contact details themselves.
 """
 import uuid
 from datetime import datetime, timezone
@@ -143,3 +144,65 @@ class Escalation(Base):
     notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
     resolution: Mapped[str | None] = mapped_column(Text)
+
+
+class ServiceRequest(Base):
+    """A structured service request created by the intake agent (Phase 2, versioned JSON payload)."""
+    __tablename__ = "service_requests"
+    request_id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.tenant_id"), index=True)
+    conversation_id: Mapped[str | None] = mapped_column(ForeignKey("conversations.conversation_id",
+                                                                   ondelete="SET NULL"), index=True)
+    customer_ref: Mapped[str] = mapped_column(String(64))  # customer ID in the field-service platform
+    payload: Mapped[dict] = mapped_column(JSON)            # equipment, symptoms, urgency, windows; no contact details
+    schema_version: Mapped[str] = mapped_column(String(8), default="1.0")
+    status: Mapped[str] = mapped_column(String(16), default="new")  # new | contacted | scheduled | closed
+    staff_notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class ToolCall(Base):
+    """Audit log: every tool the agent runs (inputs redacted), with its result and any approver."""
+    __tablename__ = "tool_calls"
+    call_id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    tenant_id: Mapped[str] = mapped_column(String(64), index=True)
+    conversation_id: Mapped[str | None] = mapped_column(String(32), index=True)
+    tool: Mapped[str] = mapped_column(String(64))
+    inputs: Mapped[dict] = mapped_column(JSON)
+    result: Mapped[dict | None] = mapped_column(JSON)
+    ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    error: Mapped[str | None] = mapped_column(Text)
+    idempotency_key: Mapped[str | None] = mapped_column(String(100))
+    approver: Mapped[str | None] = mapped_column(String(100))
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+
+
+class ApprovalPolicy(Base):
+    """Per-tenant rule for when the agent may act alone (Phase 3); rules are data, not code."""
+    __tablename__ = "approval_policies"
+    policy_id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.tenant_id"), index=True)
+    condition: Mapped[str] = mapped_column(String(64))  # e.g. standard_visit, after_hours, binding_quote
+    auto_approve: Mapped[bool] = mapped_column(Boolean, default=False)
+    approver_role: Mapped[str] = mapped_column(String(16), default="admin")
+    timeout_hours: Mapped[int] = mapped_column(Integer, default=24)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class Approval(Base):
+    """A pending or decided approval for an action outside the auto-approval policy (Phase 3)."""
+    __tablename__ = "approvals"
+    approval_id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.tenant_id"), index=True)
+    request_id: Mapped[str] = mapped_column(ForeignKey("service_requests.request_id"), index=True)
+    policy_id: Mapped[str | None] = mapped_column(ForeignKey("approval_policies.policy_id"))
+    reason: Mapped[str] = mapped_column(String(500))
+    proposal: Mapped[dict] = mapped_column(JSON)  # what the agent wants to do (slot, price range)
+    status: Mapped[str] = mapped_column(String(16), default="pending")  # pending | approved | rejected
+    decided_by: Mapped[str | None] = mapped_column(String(100))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    escalated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)

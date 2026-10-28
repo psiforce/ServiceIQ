@@ -15,6 +15,8 @@ data/
   eval/
     golden_qa.csv     100 questions with reference answers and source IDs
     adversarial.csv   35 security and robustness cases
+    multiturn.csv     6 two-turn follow-up cases
+    intake_dialogues.csv  30 scripted service-request dialogues (Phase 2)
   scripts/
     build_documents.py    builds raw/*.pdf and raw/*.docx from src/*.md
     validate_datasets.py  checks manifests and eval references
@@ -59,6 +61,10 @@ These map directly to the metadata schema in the architecture document, section 
 
 **`adversarial.csv`**: `adv_id, attack_type, tenant_context, input, expected_behavior, must_not_contain, notes`. It covers direct and indirect prompt injection, cross-tenant leakage, internal-document access, expired/draft leakage, PII, abuse, off-topic requests and unsafe DIY requests. `must_not_contain` holds semicolon-separated strings for automated checks.
 
+**`intake_dialogues.csv`** (Phase 2): `case_id, tenant, turns, expected_outcome, expected_fields, must_contain, notes`. `turns` holds the customer's messages separated by `||`; the evaluation submits the contact form when asked and confirms the summary. Outcomes: `submitted`, `not_eligible`, `emergency`, `escalated`, `intake_cancelled`, `answered`. Run with `python -m serviceiq evaluate-intake`.
+
+**`tenants/*/fieldservice.json`**: each contractor's field-service setup (timezone, service types from its price book, fictional technicians and working hours), loaded by `python -m fieldservice seed`.
+
 ## Time sensitivity
 
 Effective and expiry dates assume an **evaluation date of 2026-10-26**. Pin "now" to this date in evaluation runs, for example by passing `as_of` to the retrieval filter. Otherwise the fall promotion (ends 2026-11-30) and the 2026 price book (ends 2026-12-31) will start failing as time passes.
@@ -76,4 +82,4 @@ python data/scripts/validate_datasets.py --as-of 2026-10-26
 
 - The reference answers were written by the author of this dataset. Have someone review the `critical` rows before using them as acceptance criteria.
 - This corpus is small and clean compared with real tenant content. Add scanned PDFs, messy price tables and near-duplicate pages when testing ingestion robustness.
-- Phase 2 datasets (intent labels, intake dialogues) are not included yet.
+- Intent labels for the guard classifier are not a separate dataset; intake dialogues are in `intake_dialogues.csv`.

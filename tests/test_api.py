@@ -38,7 +38,8 @@ class FakeAssistant:
 @pytest.fixture
 def env(tmp_path):
     settings = load_settings(database_url=f"sqlite:///{(tmp_path / 'test.db').as_posix()}",
-                             outbox_dir=tmp_path / "outbox", rate_limit_per_minute=5)
+                             outbox_dir=tmp_path / "outbox", rate_limit_per_minute=5,
+                             agent_enabled=False)  # MVP question path; the agent path is tested in test_agent_api
     engine = make_engine(settings.database_url)
     with session_factory(engine)() as s:
         keys = {t: provision_tenant(s, t, t.title()) for t in ("cedar-ridge", "harbor-point")}

@@ -33,8 +33,11 @@ class ServiceIQClient:
         self.http = httpx.Client(base_url=base_url, timeout=timeout, headers={"X-Widget-Key": widget_key},
                                  auth=_IdTokenAuth(base_url) if id_token else None)
 
-    def chat(self, message: str, conversation_id: str | None = None) -> SimpleNamespace:
-        r = self.http.post("/v1/chat", json={"message": message, "conversation_id": conversation_id})
+    def chat(self, message: str, conversation_id: str | None = None, contact: dict | None = None,
+             confirm: bool | None = None) -> SimpleNamespace:
+        body = {"message": message, "conversation_id": conversation_id}
+        body |= ({"contact": contact} if contact else {}) | ({"confirm": confirm} if confirm is not None else {})
+        r = self.http.post("/v1/chat", json=body)
         r.raise_for_status()
         data = r.json()
         # same shape the chat UI renders for direct (in-process) answers
@@ -42,7 +45,9 @@ class ServiceIQClient:
             status=data["status"], answer=data["answer"], trace_id=data["trace_id"],
             conversation_id=data["conversation_id"], message_id=data["message_id"],
             citations=[SimpleNamespace(**c) for c in data["citations"]],
-            escalation=data["escalation"], cost_usd=0.0, latency_ms={"total": data["latency_ms"]}, debug={})
+            escalation=data["escalation"], cost_usd=0.0, latency_ms={"total": data["latency_ms"]}, debug={},
+            stage=data.get("stage"), needs_contact=data.get("needs_contact", False),
+            service_request=data.get("service_request"))
 
     def callback(self, conversation_id: str, message_id: str | None, name: str, phone: str,
                  preferred_time: str | None = None) -> dict:

@@ -4,11 +4,11 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import create_engine, delete, select
+from sqlalchemy import create_engine, delete, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from serviceiq.storage.models import Base, Conversation, Escalation, Tenant
+from serviceiq.storage.models import Base, Conversation, Escalation, ServiceRequest, Tenant, ToolCall
 
 
 def hash_key(key: str) -> str:
@@ -50,13 +50,20 @@ def tenant_for_key(session: Session, key: str) -> Tenant | None:
     return tenant if tenant is not None and tenant.active else None
 
 
-def purge_old_conversations(session: Session, days: int) -> int:
-    """Delete conversations (with their messages, citations, feedback and tickets) older than `days`."""
+def purge_old_conversations(session: Session, days: int, forget=None) -> int:
+    """Delete conversations (with their messages, citations, feedback, tickets and agent audit rows) older than
+    `days`. Service requests are kept (they hold no personal data) but unlinked. `forget(conversation_id)` is
+    called for each one, to delete the agent's saved state."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     old = list(session.scalars(select(Conversation.conversation_id).where(Conversation.started_at < cutoff)))
     if old:
         session.execute(delete(Escalation).where(Escalation.conversation_id.in_(old)))
+        session.execute(delete(ToolCall).where(ToolCall.conversation_id.in_(old)))
+        session.execute(update(ServiceRequest).where(ServiceRequest.conversation_id.in_(old))
+                        .values(conversation_id=None))
         for conversation in session.scalars(select(Conversation).where(Conversation.conversation_id.in_(old))):
             session.delete(conversation)
         session.commit()
+        for conversation_id in old if forget else []:
+            forget(conversation_id)
     return len(old)

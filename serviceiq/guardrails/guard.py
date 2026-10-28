@@ -44,6 +44,7 @@ class GuardResult:
     action: str
     message: str | None = None          # response to show when the guard answers directly
     emergency_type: str | None = None
+    intent: str = "hvac_question"       # classifier intent (rules fallback); service_request starts intake
     injection_suspected: bool = False
     pii_types: set[str] = field(default_factory=set)
     redacted_text: str = ""             # safe to log
@@ -79,7 +80,8 @@ def check_message(text: str, profile: TenantProfile, client=None, model: str = "
 
     # 3) decide
     emergency = rule_emergency or (llm.get("emergency") if llm.get("emergency") not in (None, "none") else None)
-    intent = llm.get("intent", "hvac_question")
+    intent = llm.get("intent") or ("service_request" if rules.wants_service_visit(text) else "hvac_question")
+    result.intent = intent
     if emergency:
         result.action, result.emergency_type = "emergency", emergency
         result.message = emergency_message(emergency, profile)

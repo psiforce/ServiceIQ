@@ -1,0 +1,19 @@
+{
+  "org_id": "harbor-point",
+  "name": "Harbor Point Heating & Air",
+  "timezone": "America/New_York",
+  "service_types": [
+    {"code": "HP-DIAG", "name": "Diagnostic service call", "duration": 90, "price": 99},
+    {"code": "HP-TUNE-AC", "name": "AC tune-up", "duration": 90, "price": 139, "skill": "ac"},
+    {"code": "HP-TUNE-FURN", "name": "Furnace tune-up", "duration": 90, "price": 139, "skill": "furnace"},
+    {"code": "HP-BOILER", "name": "Boiler tune-up", "duration": 120, "price": 189, "skill": "boiler"}
+  ],
+  "technicians": [
+    {"name": "Sam Okafor", "skills": ["ac", "furnace", "boiler", "water_heater"],
+     "working_hours": {"mon": ["08:00", "17:00"], "tue": ["08:00", "17:00"], "wed": ["08:00", "17:00"],
+                       "thu": ["08:00", "17:00"], "fri": ["08:00", "17:00"]}},
+    {"name": "Elena Brooks", "skills": ["ac", "furnace"],
+     "working_hours": {"mon": ["08:00", "17:00"], "tue": ["08:00", "17:00"], "wed": ["08:00", "17:00"],
+                       "thu": ["08:00", "17:00"], "fri": ["08:00", "17:00"]}}
+  ]
+}

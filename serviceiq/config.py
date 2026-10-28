@@ -65,6 +65,15 @@ class Settings(BaseSettings):
     admin_passwords: SecretStr | None = None  # JSON {"username": "password"} supplied by init-db in the cloud
     uploads_bucket: str = ""          # Cloud Storage bucket for uploaded documents; empty = local var/uploads
 
+    # Phase 2-3 agent (M14+): intake and operations through one LangGraph agent
+    agent_enabled: bool = True        # false = MVP behaviour (questions only)
+    intake_max_no_progress: int = 2   # turns without new details before handing off to a person
+    # Field-service platform: its URL (empty = run it in-process on fsp_database_url, for local dev and tests)
+    fsp_url: str = ""
+    fsp_api_keys: str = ""            # JSON {"tenant": "key"}; else var/dev_fsp_keys.json
+    fsp_database_url: str = f"sqlite:///{(PROJECT_ROOT / 'var' / 'fieldservice.db').as_posix()}"
+    fsp_id_token: bool = False        # attach a Google ID token (private Cloud Run service)
+
     # Email notifications for escalations; without SMTP_HOST, emails are written to var/outbox/
     smtp_host: str = ""
     smtp_port: int = 587

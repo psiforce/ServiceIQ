@@ -8,6 +8,12 @@ case "$role" in
   api)
     exec uvicorn serviceiq.api.main:app --host 0.0.0.0 --port "$PORT" --proxy-headers --forwarded-allow-ips "*"
     ;;
+  fsp)
+    exec uvicorn fieldservice.main:app --host 0.0.0.0 --port "$PORT" --proxy-headers --forwarded-allow-ips "*"
+    ;;
+  fsp-seed)
+    exec python -m fieldservice seed "$@"
+    ;;
   chat)
     exec streamlit run apps/chat.py --server.port "$PORT" --server.address 0.0.0.0
     ;;

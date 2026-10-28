@@ -1,4 +1,4 @@
-"""ServiceIQ admin console: CSR ticket inbox, knowledge management and analytics.
+"""ServiceIQ admin console: CSR ticket inbox, service requests, knowledge management and analytics.
 
 Run:  .venv\\Scripts\\streamlit run apps/admin.py --server.port 8502
 Every view is scoped to the signed-in user's tenant. Roles: admin (everything) or csr (ticket inbox only).
@@ -17,8 +17,9 @@ from serviceiq.config import PROJECT_ROOT, get_settings  # noqa: E402
 from serviceiq.storage.auth import authenticate  # noqa: E402
 from serviceiq.storage.db import make_engine, session_factory  # noqa: E402
 from serviceiq.storage.models import (Conversation, DocumentRecord, DocumentVersionRecord, Escalation,  # noqa: E402
-                                      Feedback, Message)
+                                      Feedback, Message, ServiceRequest)
 from serviceiq.storage import registry  # noqa: E402
+from serviceiq.agent.schema import EQUIPMENT_LABELS, summary  # noqa: E402
 
 st.set_page_config(page_title="ServiceIQ Admin", page_icon="🛠️", layout="wide")
 DOC_TYPES = ["price_book", "policy", "warranty_policy", "promotion", "safety", "faq", "service_catalog",
@@ -29,6 +30,12 @@ PRIORITY_ORDER = {"P1": 0, "P2": 1, "P3": 2}
 @st.cache_resource
 def sessions():
     return session_factory(make_engine(get_settings().database_url))
+
+
+@st.cache_resource
+def field_service():
+    from serviceiq.agent.fieldservice_client import make_field_service
+    return make_field_service(get_settings())
 
 
 @st.cache_resource
@@ -80,7 +87,7 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
 
-tabs = ["Ticket inbox"] + (["Knowledge", "Analytics"] if user["role"] == "admin" else [])
+tabs = ["Ticket inbox", "Service requests"] + (["Knowledge", "Analytics"] if user["role"] == "admin" else [])
 views = dict(zip(tabs, st.tabs(tabs)))
 
 # ---------------------------------------------------------------- ticket inbox (BP-4)
@@ -128,6 +135,48 @@ with views["Ticket inbox"], sessions()() as session:
                         st.success("Saved.")
                         st.rerun()
                 st.caption(f"Ticket {t.escalation_id} · trace {t.handoff_packet.get('trace_id') or '-'}")
+
+# ---------------------------------------------------------------- service requests (BP-6, Phase 2 intake)
+with views["Service requests"], sessions()() as session:
+    st.caption("Requests the assistant collected. Contact details come live from the field-service platform; "
+               "a person books the appointment.")
+    request_filter = st.radio("Show", ["new", "contacted", "scheduled", "closed", "all"], horizontal=True,
+                              key="request-filter")
+    query = select(ServiceRequest).where(ServiceRequest.tenant_id == tenant_id).order_by(ServiceRequest.created_at.desc())
+    if request_filter != "all":
+        query = query.where(ServiceRequest.status == request_filter)
+    requests = list(session.scalars(query.limit(100)))
+    if not requests:
+        st.info("No service requests in this view.")
+    for r in requests:
+        p = r.payload
+        urgent = "🔴 " if p.get("urgency") == "urgent" else ""
+        with st.expander(f"{urgent}{EQUIPMENT_LABELS.get(p.get('equipment_type'), 'HVAC')} · {p.get('symptoms', '')[:60]} "
+                         f"· {r.created_at:%b %d %H:%M} · {r.status}"):
+            left, right = st.columns([3, 2])
+            with left:
+                st.markdown(summary(p).replace("$", chr(92) + "$"))
+                st.caption(f"Request {r.request_id} · schema v{r.schema_version}")
+            with right:
+                st.markdown("**Customer**")
+                try:
+                    record = field_service().get_customer(tenant_id, r.customer_ref)
+                except Exception as exc:  # the platform being down must not break the console
+                    record = None
+                    st.warning(f"Field-service platform unavailable ({type(exc).__name__}).")
+                if record:
+                    c = record["customer"]
+                    st.write(f"{c['name']} · {c['phone']}" + (f" · {c['email']}" if c.get("email") else ""))
+                    st.caption(", ".join(x for x in (c.get("address"), c.get("city"), c.get("zip")) if x))
+                with st.form(f"request-{r.request_id}"):
+                    statuses = ["new", "contacted", "scheduled", "closed"]
+                    new_status = st.selectbox("Status", statuses, index=statuses.index(r.status))
+                    notes = st.text_area("Staff notes", value=r.staff_notes or "")
+                    if st.form_submit_button("Save"):
+                        r.status, r.staff_notes = new_status, notes or None
+                        session.commit()
+                        st.success("Saved.")
+                        st.rerun()
 
 if user["role"] != "admin":
     st.stop()

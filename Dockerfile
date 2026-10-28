@@ -1,5 +1,5 @@
 # ServiceIQ: one image for every role. The first argument picks the role (see deploy/entrypoint.sh):
-#   api | chat | admin | init-db | ingest | evaluate ...
+#   api | chat | admin | fsp | fsp-seed | init-db | ingest | evaluate ...
 FROM python:3.14-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -16,6 +16,7 @@ COPY requirements.txt requirements.lock ./
 RUN pip install -r requirements.txt -c requirements.lock
 
 COPY serviceiq ./serviceiq
+COPY fieldservice ./fieldservice
 COPY apps ./apps
 COPY data ./data
 COPY .streamlit ./.streamlit

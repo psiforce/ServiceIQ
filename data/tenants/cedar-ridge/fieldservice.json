@@ -1,0 +1,23 @@
+{
+  "org_id": "cedar-ridge",
+  "name": "Cedar Ridge Comfort Systems",
+  "timezone": "America/New_York",
+  "service_types": [
+    {"code": "DIAG-01", "name": "Diagnostic service call (standard hours)", "duration": 90, "price": 89},
+    {"code": "TUNE-AC", "name": "AC tune-up (one system)", "duration": 90, "price": 129, "skill": "ac"},
+    {"code": "TUNE-FURN", "name": "Furnace tune-up (one system)", "duration": 90, "price": 129, "skill": "furnace"},
+    {"code": "TUNE-HP", "name": "Heat pump tune-up (one system)", "duration": 90, "price": 149, "skill": "heat_pump"},
+    {"code": "INST-EST", "name": "In-home replacement estimate", "duration": 60, "price": 0}
+  ],
+  "technicians": [
+    {"name": "Dana Whitfield", "skills": ["ac", "furnace", "heat_pump", "ductless"],
+     "working_hours": {"mon": ["07:00", "18:00"], "tue": ["07:00", "18:00"], "wed": ["07:00", "18:00"],
+                       "thu": ["07:00", "18:00"], "fri": ["07:00", "18:00"]}},
+    {"name": "Marcus Lee", "skills": ["ac", "furnace", "heat_pump"],
+     "working_hours": {"mon": ["07:00", "18:00"], "tue": ["07:00", "18:00"], "wed": ["07:00", "18:00"],
+                       "thu": ["07:00", "18:00"], "fri": ["07:00", "18:00"], "sat": ["08:00", "14:00"]}},
+    {"name": "Priya Nair", "skills": ["ac", "ductless", "heat_pump"],
+     "working_hours": {"tue": ["07:00", "18:00"], "wed": ["07:00", "18:00"], "thu": ["07:00", "18:00"],
+                       "fri": ["07:00", "18:00"], "sat": ["08:00", "14:00"]}}
+  ]
+}

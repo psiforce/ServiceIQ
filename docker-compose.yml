@@ -1,6 +1,6 @@
-# Local ServiceIQ stack: Postgres + API + customer chat + admin console.
+# Local ServiceIQ stack: Postgres + field-service platform + API + customer chat + admin console.
 #   docker compose up --build        then open http://localhost:8501 (chat) and http://localhost:8502 (admin)
-# API keys come from your .env file. Demo logins and widget keys are written to ./var/docker/.
+# API keys come from your .env file. Demo logins, widget keys and field-service keys are written to ./var/docker/.
 
 x-serviceiq: &serviceiq
   build: .
@@ -8,9 +8,15 @@ x-serviceiq: &serviceiq
   env_file: .env
   environment:
     DATABASE_URL: postgresql+psycopg://serviceiq:serviceiq-local@db:5432/serviceiq
+    FSP_URL: http://fsp:8080
     OUTBOX_DIR: /app/var/outbox
   volumes:
     - ./var/docker:/app/var
+
+x-fsp-db: &fsp-db
+  # The field-service platform uses its own database and a normal (non-superuser) role: superusers would
+  # bypass the row-level security that keeps each contractor's data separate.
+  FSP_DATABASE_URL: postgresql+psycopg://fsp_app:fsp-local@db:5432/fieldservice
 
 services:
   db:
@@ -26,6 +32,43 @@ services:
       interval: 3s
       retries: 20
 
+  fsp-db-setup:  # one-off, idempotent: the field-service role and database
+    image: postgres:17-alpine
+    environment:
+      PGPASSWORD: serviceiq-local
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        psql -h db -U serviceiq -d serviceiq -v ON_ERROR_STOP=1 <<'SQL'
+        SELECT 'CREATE ROLE fsp_app LOGIN PASSWORD ''fsp-local'' NOSUPERUSER NOBYPASSRLS'
+          WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'fsp_app') \gexec
+        SELECT 'CREATE DATABASE fieldservice OWNER fsp_app'
+          WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'fieldservice') \gexec
+        SQL
+    depends_on:
+      db: {condition: service_healthy}
+
+  fsp-init:  # one-off: tables, row-level security, contractors from data/tenants/*/fieldservice.json
+    <<: *serviceiq
+    command: ["fsp-seed"]
+    environment:
+      <<: *fsp-db
+    depends_on:
+      fsp-db-setup: {condition: service_completed_successfully}
+
+  fsp:
+    <<: *serviceiq
+    command: ["fsp"]
+    ports: ["8100:8080"]
+    environment:
+      <<: *fsp-db
+    depends_on:
+      fsp-init: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 5s
+      retries: 20
+
   init:  # one-off: create tables, provision tenants, seed the document registry, create demo admins
     <<: *serviceiq
     command: ["init-db"]
@@ -38,6 +81,7 @@ services:
     ports: ["8000:8080"]
     depends_on:
       init: {condition: service_completed_successfully}
+      fsp: {condition: service_healthy}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
       interval: 5s
@@ -59,6 +103,7 @@ services:
     ports: ["8502:8080"]
     depends_on:
       init: {condition: service_completed_successfully}
+      fsp: {condition: service_healthy}
 
 volumes:
   pgdata:

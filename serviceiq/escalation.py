@@ -8,8 +8,10 @@ from datetime import datetime, timezone
 from email.message import EmailMessage
 from pathlib import Path
 
+from sqlalchemy.orm import Session
+
 from serviceiq.config import Settings
-from serviceiq.storage.models import Conversation, Escalation
+from serviceiq.storage.models import Conversation, Escalation, ServiceRequest
 from serviceiq.tenants import TenantProfile
 
 TRANSCRIPT_MESSAGES = 12
@@ -30,6 +32,16 @@ def handoff_packet(conversation: Conversation, trigger: dict | None = None) -> d
         "trace_id": last_answer.trace_id if last_answer else None,
         **(trigger or {}),
     }
+
+
+def open_ticket(session: Session, tenant_id: str, conversation: Conversation, message_id: str | None,
+                priority: str, reason: str) -> Escalation:
+    ticket = Escalation(tenant_id=tenant_id, conversation_id=conversation.conversation_id, message_id=message_id,
+                        priority=priority, reason=reason)
+    session.add(ticket)
+    session.flush()
+    ticket.handoff_packet = handoff_packet(conversation, {"trigger": reason})
+    return ticket
 
 
 def _email(settings: Settings, profile: TenantProfile, ticket: Escalation) -> EmailMessage:
@@ -59,21 +71,42 @@ def _email(settings: Settings, profile: TenantProfile, ticket: Escalation) -> Em
     return msg
 
 
-def notify(settings: Settings, profile: TenantProfile, ticket: Escalation) -> str:
-    """Send (or, without SMTP, save) the CSR notification. Returns where it went."""
-    message = _email(settings, profile, ticket)
+def send(settings: Settings, message: EmailMessage, file_tag: str) -> str:
+    """Send through SMTP, or (without SMTP settings) save to the outbox folder. Returns where it went."""
     if settings.smtp_host:
         with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=15) as smtp:
             smtp.starttls()
             if settings.smtp_username and settings.smtp_password and settings.smtp_password.get_secret_value():
                 smtp.login(settings.smtp_username, settings.smtp_password.get_secret_value())
             smtp.send_message(message)
-        destination = f"email to {profile.escalation_email}"
-    else:
-        outbox = Path(settings.outbox_dir)
-        outbox.mkdir(parents=True, exist_ok=True)
-        path = outbox / f"{datetime.now(timezone.utc):%Y%m%d-%H%M%S}-{ticket.priority}-{ticket.escalation_id}.eml"
-        path.write_bytes(bytes(message))
-        destination = str(path)
+        return f"email to {message['To']}"
+    outbox = Path(settings.outbox_dir)
+    outbox.mkdir(parents=True, exist_ok=True)
+    path = outbox / f"{datetime.now(timezone.utc):%Y%m%d-%H%M%S}-{file_tag}.eml"
+    path.write_bytes(bytes(message))
+    return str(path)
+
+
+def notify(settings: Settings, profile: TenantProfile, ticket: Escalation) -> str:
+    """Send (or, without SMTP, save) the CSR notification. Returns where it went."""
+    destination = send(settings, _email(settings, profile, ticket), f"{ticket.priority}-{ticket.escalation_id}")
     ticket.notified_at = datetime.now(timezone.utc)
     return destination
+
+
+def notify_service_request(settings: Settings, profile: TenantProfile, request: ServiceRequest, contact: dict,
+                           summary: str) -> str:
+    """Tell the office a new service request is waiting (Phase 2: a person books the appointment)."""
+    lines = [f"Service request: {request.request_id}", f"Conversation: {request.conversation_id}",
+             f"Customer record (field-service platform): {request.customer_ref}", "",
+             "Customer contact:", f"  Name: {contact.get('name') or '-'}", f"  Phone: {contact.get('phone') or '-'}",
+             f"  Email: {contact.get('email') or '-'}",
+             f"  Address: {', '.join(x for x in (contact.get('street'), contact.get('city'), contact.get('zip')) if x)}",
+             "", "Request:", summary, "", "Reply to the customer to book a time; the assistant does not confirm "
+             "appointments."]
+    msg = EmailMessage()
+    msg["Subject"] = f"[REQUEST] ServiceIQ service request {request.request_id[:8]}: {request.payload.get('equipment_type') or 'HVAC'}"
+    msg["From"] = settings.escalation_from_email or "serviceiq@localhost"
+    msg["To"] = profile.escalation_email
+    msg.set_content("\n".join(lines))
+    return send(settings, msg, f"REQ-{request.request_id}")

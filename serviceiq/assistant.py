@@ -83,8 +83,10 @@ class Assistant:
         ordered, evidence, _ = retrieve_evidence(self.retriever, self.reranker, self.settings, standalone, tenant_id)
         return standalone, follow_up, usage, ordered, evidence
 
-    def ask(self, question: str, tenant_id: str, history: list[tuple[str, str]] | None = None) -> AssistantResponse:
-        """Answer `question`. `history` holds earlier (question, answer) turns of the same conversation."""
+    def ask(self, question: str, tenant_id: str, history: list[tuple[str, str]] | None = None,
+            verdict=None) -> AssistantResponse:
+        """Answer `question`. `history` holds earlier (question, answer) turns of the same conversation.
+        `verdict` is a guard result the caller already has for this message (the agent), to avoid a second check."""
         s = self.settings
         started = time.perf_counter()
         profile = load_profile(s.data_dir, tenant_id)  # tenant comes from the caller's authentication
@@ -94,9 +96,10 @@ class Assistant:
         # raw text (that is how card numbers and SSNs are caught and refused).
         safe_question = redact(question)
         retrieval = self.pool.submit(self._resolve_and_retrieve, safe_question, tenant_id, history or [])
-        verdict = check_message(question, profile, self.client, s.guard_model)
+        reused = verdict is not None
+        verdict = verdict or check_message(question, profile, self.client, s.guard_model)
         t_guard = time.perf_counter()
-        cost = (verdict.usage.cost or 0.0) if verdict.usage else 0.0
+        cost = (verdict.usage.cost or 0.0) if verdict.usage and not reused else 0.0
 
         if verdict.action != "answer":
             retrieval.cancel()

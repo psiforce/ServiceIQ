@@ -542,12 +542,34 @@ def serve(host: str = "127.0.0.1", port: int = 8000, reload: bool = False):
 @app.command()
 def purge(days: int = typer.Option(None, help="Retention in days (default: RETENTION_DAYS, 90).")):
     """M11: delete conversations, messages, feedback and tickets older than the retention period."""
+    from serviceiq.agent.checkpoint import make_checkpointer
     from serviceiq.storage.db import make_engine, purge_old_conversations, session_factory
 
     settings = get_settings()
+    checkpoints = make_checkpointer(settings)  # the agent's saved conversation state goes too
     with session_factory(make_engine(settings.database_url))() as session:
-        removed = purge_old_conversations(session, days or settings.retention_days)
+        removed = purge_old_conversations(session, days or settings.retention_days, forget=checkpoints.delete_thread)
     console.print(f"Purged {removed} conversation(s) older than {days or settings.retention_days} days.")
+
+
+@app.command("evaluate-intake")
+def evaluate_intake():
+    """M14: run the scripted intake dialogues through the agent; writes reports/intake_<date>.md and .csv."""
+    from serviceiq.evaluation.intake_eval import run_intake_eval, write_report
+
+    settings = get_settings()
+
+    def show(r):
+        mark = "[green]pass[/green]" if r.passed else "[red]FAIL[/red]"
+        console.print(f"{r.case_id:4} {r.tenant:13} expected {r.expected:16} got {r.outcome:16} {mark}")
+
+    results, metrics = run_intake_eval(settings, progress=show)
+    out = write_report(results, metrics, PROJECT_ROOT / "reports",
+                       f"guard + extraction `{settings.guard_model}` · answers `{settings.answer_model}`")
+    console.print(f"\nOutcome accuracy {metrics['outcome_accuracy']:.1%} · completion {metrics['completion_rate']:.1%} · "
+                  f"fields {metrics['field_accuracy']:.1%} · emergencies {metrics['emergency_exit_rate']:.0%} · "
+                  f"contact leaks {metrics['pii_leaks']} · cost ${metrics['total_cost']:.3f}")
+    console.print(f"Report: {out.relative_to(PROJECT_ROOT)}")
 
 
 @app.command("eval-guard")

@@ -1,7 +1,8 @@
 """ServiceIQ customer chat (Sprint 1 pilot UI).
 
 Run:  .venv\\Scripts\\streamlit run apps/chat.py
-Calls the serviceiq package directly; from M11 it calls the FastAPI service instead.
+Calls the serviceiq package directly; from M11 it calls the FastAPI service instead. Service requests
+(M14 intake agent: contact form, summary to confirm) work in API mode.
 """
 import sys
 from pathlib import Path
@@ -22,9 +23,12 @@ STATUS_BANNER = {
     "fallback": ("info", "ℹ️", "I couldn't confirm this from approved information."),
     "escalated": ("warning", "🙋", "Connecting you with our team."),
     "sensitive_data": ("warning", "🔒", "Please don't share sensitive details in chat."),
+    "not_eligible": ("warning", "📍", "We can't set up this visit."),
+    "confirming": ("info", "📝", "Please check your service request."),
+    "submitted": ("success", "✅", "Service request sent to the office."),
 }
 SUGGESTIONS = ["How much is a diagnostic visit?", "Is my compressor under warranty?",
-               "Do you repair Carrier AC units?", "What does the Comfort Club include?"]
+               "Do you repair Carrier AC units?", "My AC isn't cooling. Can someone come out?"]
 
 
 @st.cache_resource(show_spinner="Starting the assistant...")
@@ -52,12 +56,41 @@ def md(text: str) -> str:
     return text.replace("$", r"\$")
 
 
-def render_assistant(turn: dict, index: int, tenant: str, show_debug: bool) -> None:
+def render_intake_controls(r, index: int, tenant: str) -> None:
+    """Only on the latest reply: the contact form when asked, Confirm/Edit on the request summary."""
+    if getattr(r, "needs_contact", False):
+        with st.form(key=f"contact-form-{index}"):
+            st.markdown("**Your contact details** (sent to the office only)")
+            name = st.text_input("Name")
+            phone = st.text_input("Phone")
+            email = st.text_input("Email (optional)")
+            street = st.text_input("Service address (street)")
+            city, zip_code = st.columns(2)
+            city_value = city.text_input("City (optional)")
+            zip_value = zip_code.text_input("ZIP", max_chars=5)
+            if st.form_submit_button("Send details") and name and phone and street:
+                st.session_state[f"pending-{tenant}"] = {
+                    "message": "Here are my contact details.",
+                    "contact": {"name": name, "phone": phone, "email": email, "street": street,
+                                "city": city_value, "zip": zip_value if len(zip_value) == 5 else ""}}
+                st.rerun()
+    elif r.status == "confirming":
+        confirm, edit = st.columns(2)
+        if confirm.button("Confirm and send", key=f"confirm-{index}", type="primary", width="stretch"):
+            st.session_state[f"pending-{tenant}"] = {"message": "Confirm and send.", "confirm": True}
+            st.rerun()
+        if edit.button("Change something", key=f"edit-{index}", width="stretch"):
+            st.toast("Type what you'd like to change below.")
+
+
+def render_assistant(turn: dict, index: int, tenant: str, show_debug: bool, latest: bool = False) -> None:
     r = turn["response"]
     kind, icon, title = STATUS_BANNER.get(r.status, (None, None, None))
     if kind:
         getattr(st, kind)(title, icon=icon)
     st.markdown(md(r.answer))
+    if latest:
+        render_intake_controls(r, index, tenant)
 
     if r.citations:
         with st.expander(f"Sources ({len(r.citations)})"):
@@ -151,9 +184,13 @@ for i, turn in enumerate(history):
     with st.chat_message("user"):
         st.markdown(md(turn["question"]))
     with st.chat_message("assistant"):
-        render_assistant(turn, i, tenant, show_debug)
+        render_assistant(turn, i, tenant, show_debug, latest=i == len(history) - 1)
 
 question = st.chat_input("Type your question...")
+pending = st.session_state.pop(f"pending-{tenant}", None)  # a form or button from the latest reply
+if pending and not question:
+    question = pending["message"]
+pending = pending or {}
 if not history and not question:
     st.write("Try one of these:")
     cols = st.columns(2)
@@ -172,7 +209,8 @@ if question:
             try:
                 client = get_api_client(tenant)
                 if client is not None:  # the API keeps the conversation history server-side
-                    response = client.chat(question, st.session_state.get(f"conversation-{tenant}"))
+                    response = client.chat(question, st.session_state.get(f"conversation-{tenant}"),
+                                           contact=pending.get("contact"), confirm=pending.get("confirm"))
                     st.session_state[f"conversation-{tenant}"] = response.conversation_id
                 else:
                     response = get_assistant().ask(question, tenant, history=context)

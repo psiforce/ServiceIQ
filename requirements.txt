@@ -7,6 +7,11 @@ langchain
 langchain-openai
 # langchain-community is sunset; loaders are implemented in serviceiq/ingestion/loaders.py
 
+# Agent (Phase 2-3): LangGraph with conversation state saved in Postgres (cloud) or SQLite (local)
+langgraph
+langgraph-checkpoint-postgres
+langgraph-checkpoint-sqlite
+
 # Vector store (official SDK used directly so metadata filters stay explicit)
 pinecone
 
