@@ -4,7 +4,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import create_engine, delete, select, update
+from sqlalchemy import create_engine, delete, inspect, select, text, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -22,7 +22,20 @@ def make_engine(database_url: str) -> Engine:
     else:
         engine = create_engine(database_url, pool_pre_ping=True)
     Base.metadata.create_all(engine)
+    _add_new_columns(engine)
     return engine
+
+
+# Columns added to existing tables after they shipped (create_all only creates missing tables)
+NEW_COLUMNS = [("service_requests", "job_ref", "VARCHAR(64)")]  # M16: the booked job in the field-service platform
+
+
+def _add_new_columns(engine: Engine) -> None:
+    inspector = inspect(engine)
+    with engine.begin() as conn:
+        for table, column, sql_type in NEW_COLUMNS:
+            if column not in {c["name"] for c in inspector.get_columns(table)}:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}"))
 
 
 def session_factory(engine: Engine) -> sessionmaker[Session]:

@@ -144,6 +144,8 @@ def test_admin_console_login_and_role_scoping(tmp_path, monkeypatch):
 
     url = f"sqlite:///{(tmp_path / 'ui.db').as_posix()}"
     monkeypatch.setenv("DATABASE_URL", url)
+    monkeypatch.setenv("FSP_DATABASE_URL", f"sqlite:///{(tmp_path / 'fsp.db').as_posix()}")  # never the dev file
+    monkeypatch.setenv("FSP_API_KEYS", "{}")  # no platform keys: the Schedule tab must degrade, not crash
     get_settings.cache_clear()
     with session_factory(make_engine(url))() as s:
         provision_tenant(s, "cedar-ridge", "Cedar Ridge")
@@ -151,8 +153,9 @@ def test_admin_console_login_and_role_scoping(tmp_path, monkeypatch):
         create_admin(s, "boss", "cedar-ridge", "admin", "long enough password")
         create_admin(s, "agent", "cedar-ridge", "csr", "long enough password")
     try:
-        for username, expected_tabs in [("agent", ["Ticket inbox", "Service requests"]),
-                                        ("boss", ["Ticket inbox", "Service requests", "Knowledge", "Analytics"])]:
+        for username, expected_tabs in [("agent", ["Ticket inbox", "Service requests", "Schedule"]),
+                                        ("boss", ["Ticket inbox", "Service requests", "Schedule", "Knowledge",
+                                                  "Analytics"])]:
             at = AppTest.from_file(str(PROJECT_ROOT / "apps" / "admin.py"), default_timeout=60)
             at.run()
             at.text_input[0].set_value(username)

@@ -97,3 +97,15 @@ def test_purge_keeps_requests_but_removes_the_conversation_trail(env):
         assert request is not None and request.conversation_id is None
         assert s.scalar(select(ToolCall)) is None
     assert forgotten == [conv]
+
+
+def test_existing_databases_get_new_columns(tmp_path):
+    """M16 added service_requests.job_ref; databases created by M14 get it on the next start."""
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE service_requests (request_id VARCHAR(32) PRIMARY KEY, tenant_id VARCHAR(64))")
+    make_engine(f"sqlite:///{path.as_posix()}")
+    with sqlite3.connect(path) as conn:
+        assert "job_ref" in {row[1] for row in conn.execute("PRAGMA table_info(service_requests)")}

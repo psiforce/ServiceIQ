@@ -5,7 +5,9 @@ Row-level-security tests need Postgres: set FSP_TEST_DATABASE_URL to a throwaway
 """
 import json
 import os
+from datetime import date, datetime, timedelta
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,6 +20,12 @@ from fieldservice.models import Customer, Technician
 
 CONFIGS = {t: json.loads((PROJECT_ROOT / "data" / "tenants" / t / "fieldservice.json").read_text(encoding="utf-8"))
            for t in ("cedar-ridge", "harbor-point")}
+# a third contractor three time zones west, to check that hours are local to each org
+CONFIGS["pacific-air"] = {"org_id": "pacific-air", "name": "Pacific Air", "timezone": "America/Los_Angeles",
+                          "service_types": [{"code": "DIAG", "name": "Diagnostic", "duration": 60, "price": 95}],
+                          "technicians": [{"name": "Lee Park", "skills": ["ac"],
+                                           "working_hours": {d: ["08:00", "17:00"] for d in
+                                                             ("mon", "tue", "wed", "thu", "fri")}}]}
 
 
 def build(database_url: str):
@@ -127,9 +135,153 @@ def test_postgres_row_level_security_blocks_unscoped_queries():
         assert s.scalar(text("SELECT count(*) FROM service_types")) == 0
     for org in CONFIGS:  # clean up the shared test database, one org at a time (RLS applies to deletes too)
         with org_session(fsp.factory, org) as s:
-            for table in ("idempotency_keys", "assets", "sites", "customers", "service_types", "technicians",
-                          "org_counters"):
+            for table in ("idempotency_keys", "job_notes", "jobs", "assets", "sites", "customers", "service_types",
+                          "technicians", "org_counters"):
                 s.execute(text(f"DELETE FROM {table}"))
             s.commit()
     with fsp.engine.begin() as conn:
         conn.execute(text("DELETE FROM orgs"))
+
+
+# ---------------------------------------------------------------- M16: availability and jobs
+def next_monday() -> date:
+    day = date.today() + timedelta(days=7)
+    return day + timedelta(days=(7 - day.weekday()) % 7)
+
+
+def make_customer(fsp, org="cedar-ridge", zip_code="45801") -> str:
+    return call(fsp, "POST", "/api/customers", org, json={"name": "Sched Customer", "phone": "555-010-5555",
+                                                         "address": "1 Elm St", "zip": zip_code}).json()["id"]
+
+
+def slots(fsp, org="cedar-ridge", day=None, **params) -> list[dict]:
+    day = day or next_monday()
+    response = call(fsp, "GET", "/api/availability", org,
+                    params={"date_from": day.isoformat(), "date_to": day.isoformat(), **params})
+    assert response.status_code == 200, response.text
+    return response.json()["slots"]
+
+
+def book(fsp, org="cedar-ridge", **body):
+    return call(fsp, "POST", "/api/jobs", org, json=body)
+
+
+def local(day: date, hhmm: str, tz: str) -> datetime:
+    return datetime.combine(day, datetime.strptime(hhmm, "%H:%M").time(), ZoneInfo(tz))
+
+
+def test_availability_uses_each_orgs_local_working_hours(fsp):
+    day = next_monday()
+    cedar = slots(fsp, "cedar-ridge", service_code="DIAG-01")
+    pacific = slots(fsp, "pacific-air", service_code="DIAG")
+    # Cedar Ridge's Monday starts at 07:00 New York time; Pacific Air's at 08:00 Los Angeles time
+    assert cedar[0]["local_start"].startswith(f"{day}T07:00")
+    assert pacific[0]["local_start"].startswith(f"{day}T08:00")
+    assert datetime.fromisoformat(cedar[0]["start"]) == local(day, "07:00", "America/New_York")
+    assert datetime.fromisoformat(pacific[0]["start"]) == local(day, "08:00", "America/Los_Angeles")
+    # a 90-minute diagnostic must end by 18:00
+    latest = max(datetime.fromisoformat(s["local_start"]).strftime("%H:%M")
+                 for s in slots(fsp, service_code="DIAG-01", limit=100))
+    assert latest == "16:30"
+
+
+def test_skills_and_service_zips_limit_who_is_offered(fsp):
+    boiler = slots(fsp, "harbor-point", service_code="HP-BOILER", limit=100)
+    assert boiler and {s["technician_name"] for s in boiler} == {"Sam Okafor"}
+    techs = call(fsp, "GET", "/api/technicians").json()["technicians"]
+    for tech in techs:  # only Marcus serves 45801 now
+        zips = ["45801"] if tech["name"] == "Marcus Lee" else ["45830"]
+        assert call(fsp, "PUT", f"/api/technicians/{tech['id']}", json={"service_zips": zips}).status_code == 200
+    assert {s["technician_name"] for s in slots(fsp, zip="45801", limit=100)} == {"Marcus Lee"}
+    bad = call(fsp, "PUT", f"/api/technicians/{techs[0]['id']}", json={"working_hours": {"mon": ["17:00", "08:00"]}})
+    assert bad.status_code == 422
+
+
+def test_double_booking_is_refused_and_auto_assign_uses_the_next_free_technician(fsp):
+    cid, day = make_customer(fsp), next_monday()
+    start = local(day, "09:00", "America/New_York").isoformat()
+    first = book(fsp, customer_id=cid, service_code="DIAG-01", scheduled_start=start)
+    assert first.status_code == 201 and first.json()["identifier"] == "JOB-1"
+    taken = first.json()["technician_id"]
+    clash = book(fsp, customer_id=cid, service_code="DIAG-01", scheduled_start=start, technician_id=taken)
+    assert clash.status_code == 409 and "already has a job" in clash.json()["detail"]
+    # 09:30 overlaps the 90-minute visit for that technician, so another one is assigned
+    later = local(day, "09:30", "America/New_York").isoformat()
+    second = book(fsp, customer_id=cid, service_code="DIAG-01", scheduled_start=later)
+    assert second.status_code == 201 and second.json()["technician_id"] != taken
+    offered = {(s["local_start"][11:16], s["technician_id"]) for s in slots(fsp, service_code="DIAG-01", limit=100)}
+    assert ("09:00", taken) not in offered and ("09:30", taken) not in offered
+    # only two technicians work Mondays, and both are busy at 09:30 now
+    assert book(fsp, customer_id=cid, service_code="DIAG-01", scheduled_start=later).status_code == 409
+
+
+def test_outside_working_hours_needs_the_dispatcher_override(fsp):
+    cid, day = make_customer(fsp), next_monday()
+    late = local(day, "17:30", "America/New_York").isoformat()
+    assert book(fsp, customer_id=cid, service_code="DIAG-01", scheduled_start=late).status_code == 409
+    tech = call(fsp, "GET", "/api/technicians").json()["technicians"][0]["id"]
+    override = book(fsp, customer_id=cid, service_code="DIAG-01", scheduled_start=late, technician_id=tech,
+                    allow_outside_hours=True)
+    assert override.status_code == 201
+
+
+def test_reschedule_and_cancel_keep_the_calendar_consistent(fsp):
+    cid, day = make_customer(fsp), next_monday()
+    tech = call(fsp, "GET", "/api/technicians").json()["technicians"][0]["id"]
+    a = book(fsp, customer_id=cid, service_code="DIAG-01", technician_id=tech,
+             scheduled_start=local(day, "08:00", "America/New_York").isoformat()).json()
+    b = book(fsp, customer_id=cid, service_code="DIAG-01", technician_id=tech,
+             scheduled_start=local(day, "13:00", "America/New_York").isoformat()).json()
+    assert call(fsp, "PUT", f"/api/jobs/{b['id']}", json={"scheduled_start": a["scheduled_start"]}).status_code == 409
+    assert call(fsp, "PUT", f"/api/jobs/{a['id']}", json={"status": "cancelled"}).json()["status"] == "cancelled"
+    assert call(fsp, "PUT", f"/api/jobs/{b['id']}", json={"scheduled_start": a["scheduled_start"]}).status_code == 200
+    # reactivating the cancelled job would put it on top of the moved one
+    assert call(fsp, "PUT", f"/api/jobs/{a['id']}", json={"status": "scheduled"}).status_code == 409
+    day_view = call(fsp, "GET", "/api/schedule", params={"date_from": day.isoformat(),
+                                                         "date_to": day.isoformat()}).json()
+    assert [j["identifier"] for j in day_view["jobs"]] == [b["identifier"]] and day_view["jobs"][0]["customer_name"]
+
+
+def test_jobs_are_isolated_between_orgs_and_idempotent(fsp):
+    cid, day = make_customer(fsp), next_monday()
+    start = local(day, "10:00", "America/New_York").isoformat()
+    body = {"customer_id": cid, "service_code": "DIAG-01", "scheduled_start": start}
+    first = call(fsp, "POST", "/api/jobs", json=body, headers={"Idempotency-Key": "job-1"})
+    retry = call(fsp, "POST", "/api/jobs", json=body, headers={"Idempotency-Key": "job-1"})
+    assert first.status_code == retry.status_code == 201 and first.json()["id"] == retry.json()["id"]
+    job = first.json()
+    assert call(fsp, "GET", f"/api/jobs/{job['id']}", "harbor-point").status_code == 404
+    assert call(fsp, "PUT", f"/api/jobs/{job['id']}", "harbor-point", json={"status": "cancelled"}).status_code == 404
+    assert book(fsp, "harbor-point", customer_id=cid, scheduled_start=start).status_code == 404
+    harbor_customer = make_customer(fsp, "harbor-point", "43402")
+    assert book(fsp, "harbor-point", customer_id=harbor_customer, scheduled_start=start,
+                technician_id=job["technician_id"]).status_code == 404
+    harbor_job = book(fsp, "harbor-point", customer_id=harbor_customer, service_code="HP-DIAG", scheduled_start=start)
+    assert harbor_job.status_code == 201 and harbor_job.json()["identifier"] == "JOB-1"  # numbered per contractor
+    week = {"date_from": day.isoformat(), "date_to": (day + timedelta(days=6)).isoformat()}
+    jobs = call(fsp, "GET", "/api/schedule", "harbor-point", params=week).json()["jobs"]
+    assert {j["customer_id"] for j in jobs} == {harbor_customer}
+
+
+@pytest.mark.skipif(not os.environ.get("FSP_TEST_DATABASE_URL"), reason="needs FSP_TEST_DATABASE_URL (Postgres)")
+def test_postgres_concurrent_bookings_of_one_slot_succeed_once():
+    from concurrent.futures import ThreadPoolExecutor
+
+    fsp = build(os.environ["FSP_TEST_DATABASE_URL"])
+    try:
+        cid = make_customer(fsp)
+        tech = call(fsp, "GET", "/api/technicians").json()["technicians"][0]["id"]
+        body = {"customer_id": cid, "service_code": "DIAG-01", "technician_id": tech,
+                "scheduled_start": local(next_monday(), "11:00", "America/New_York").isoformat()}
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            codes = list(pool.map(lambda _: book(fsp, **body).status_code, range(6)))
+        assert sorted(codes) == [201] + [409] * 5
+    finally:
+        for org in CONFIGS:
+            with org_session(fsp.factory, org) as s:
+                for table in ("idempotency_keys", "job_notes", "jobs", "assets", "sites", "customers",
+                              "service_types", "technicians", "org_counters"):
+                    s.execute(text(f"DELETE FROM {table}"))
+                s.commit()
+        with fsp.engine.begin() as conn:
+            conn.execute(text("DELETE FROM orgs"))

@@ -82,6 +82,16 @@ class HttpFieldService:
         response = self._request(tenant_id, "GET", f"/api/customers/{customer_ref}")
         return response.json() if response.status_code == 200 else None
 
+    def call(self, tenant_id: str, method: str, path: str, idempotency_key: str | None = None,
+             **kwargs) -> tuple[int, dict]:
+        """Any platform endpoint (scheduling, technicians): (status code, JSON body)."""
+        response = self._request(tenant_id, method, path, idempotency_key, **kwargs)
+        try:
+            body = response.json()
+        except ValueError:
+            body = {"detail": response.text[:200]}
+        return response.status_code, body
+
 
 class MemoryFieldService:
     """In-memory stand-in for tests: same behaviour, no HTTP."""

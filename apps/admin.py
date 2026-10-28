@@ -87,7 +87,66 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
 
-tabs = ["Ticket inbox", "Service requests"] + (["Knowledge", "Analytics"] if user["role"] == "admin" else [])
+if st.session_state.get("notice"):  # result of the last action, whichever tab it came from
+    st.success(st.session_state.pop("notice"))
+tabs = ["Ticket inbox", "Service requests", "Schedule"] + (["Knowledge", "Analytics"] if user["role"] == "admin"
+                                                           else [])
+
+
+def fsp_call(method: str, path: str, **kwargs) -> tuple[int, dict]:
+    """Call the field-service platform as this tenant; an outage shows as a message, never a crash."""
+    try:
+        return field_service().call(tenant_id, method, path, **kwargs)
+    except Exception as exc:
+        return 503, {"detail": f"Field-service platform unavailable ({type(exc).__name__})."}
+
+
+def local_time(iso: str, fmt: str = "%a %b %d, %H:%M") -> str:
+    return datetime.fromisoformat(iso).strftime(fmt)
+
+
+def book_visit(r: ServiceRequest) -> None:
+    """Staff books a slot for a request: availability from the platform, then the job (Phase 2: a person books)."""
+    if not st.toggle("Book a visit", key=f"book-toggle-{r.request_id}"):
+        return
+    code, body = fsp_call("GET", "/api/service-types")
+    if code != 200:
+        st.warning(body.get("detail"))
+        return
+    types = body["service_types"]
+    default = next((i for i, t in enumerate(types) if "DIAG" in t["code"]), 0)
+    chosen = st.selectbox("Service", types, index=default, format_func=lambda t: f"{t['name']} ({t['default_duration']} min)",
+                          key=f"book-type-{r.request_id}")
+    code, body = fsp_call("GET", "/api/availability", params={
+        "date_from": date.today().isoformat(), "date_to": (date.today() + timedelta(days=13)).isoformat(),
+        "service_type_id": chosen["id"], "zip": r.payload.get("zip") or "", "limit": 15})
+    if code != 200 or not body.get("slots"):
+        st.warning(body.get("detail") or "No free slots in the next two weeks.")
+        return
+    slot = st.radio("Free slots", body["slots"], key=f"book-slot-{r.request_id}",
+                    format_func=lambda x: f"{local_time(x['local_start'])} · {x['technician_name']}")
+    if st.button("Book this slot", key=f"book-go-{r.request_id}", type="primary"):
+        code, job = fsp_call("POST", "/api/jobs", idempotency_key=f"book-{r.request_id}-{slot['start']}", json={
+            "customer_id": r.customer_ref, "service_type_id": chosen["id"], "technician_id": slot["technician_id"],
+            "scheduled_start": slot["start"], "asset_id": r.payload.get("asset_ref"),
+            "priority": "high" if r.payload.get("urgency") == "urgent" else "normal",
+            "notes": summary(r.payload), "external_ref": r.request_id})
+        if code == 201:
+            r.job_ref, r.status = job["id"], "scheduled"
+            st.session_state["notice"] = (f"Booked {job['identifier']} for {local_time(job['local_start'])} with "
+                                          f"{job['technician_name']}.")
+            st.rerun()
+        st.warning(f"Couldn't book that slot: {job.get('detail')}. Pick another one.")
+
+
+def parse_hours(text: str) -> dict:
+    """'mon 07:00-18:00' per line -> {'mon': ['07:00', '18:00']}"""
+    hours = {}
+    for line in text.strip().splitlines():
+        day, _, span = line.strip().partition(" ")
+        start, _, end = span.strip().partition("-")
+        hours[day.lower()[:3]] = [start.strip(), end.strip()]
+    return hours
 views = dict(zip(tabs, st.tabs(tabs)))
 
 # ---------------------------------------------------------------- ticket inbox (BP-4)
@@ -157,6 +216,14 @@ with views["Service requests"], sessions()() as session:
             with left:
                 st.markdown(summary(p).replace("$", chr(92) + "$"))
                 st.caption(f"Request {r.request_id} · schema v{r.schema_version}")
+                if r.job_ref:
+                    code, job = fsp_call("GET", f"/api/jobs/{r.job_ref}")
+                    if code == 200:
+                        st.success(f"Booked: {job['identifier']} · {local_time(job['local_start'])} · "
+                                   f"{job['technician_name']} · {job['status']}", icon="📅")
+                elif r.status != "closed":
+                    book_visit(r)
+                    session.commit()
             with right:
                 st.markdown("**Customer**")
                 try:
@@ -177,6 +244,87 @@ with views["Service requests"], sessions()() as session:
                         session.commit()
                         st.success("Saved.")
                         st.rerun()
+
+# ---------------------------------------------------------------- schedule (M16: field-service platform)
+with views["Schedule"]:
+    day = st.date_input("Day", value=date.today(), key="schedule-day")
+    code, sched = fsp_call("GET", "/api/schedule", params={"date_from": day.isoformat(), "date_to": day.isoformat()})
+    code_techs, techs = fsp_call("GET", "/api/technicians", params={"include_inactive": True})
+    if code != 200 or code_techs != 200:
+        st.warning((sched if code != 200 else techs).get("detail"))
+    else:
+        techs = techs["technicians"]
+        st.caption(f"Times in {sched['timezone']}. Bookings are checked against working hours and existing jobs.")
+        for tech in [t for t in techs if t["active"]]:
+            jobs = [j for j in sched["jobs"] if j["technician_id"] == tech["id"]]
+            st.markdown(f"**{tech['name']}** · {len(jobs)} job(s)")
+            if jobs:
+                st.dataframe([{"Time": local_time(j["local_start"], "%H:%M"), "Job": j["identifier"],
+                               "Customer": j["customer_name"], "Service": j["service_name"] or "-",
+                               "Minutes": j["duration"], "Status": j["status"], "Priority": j["priority"]}
+                              for j in jobs], hide_index=True, width="stretch")
+        if sched["jobs"]:
+            st.markdown("**Change a job**")
+            job = st.selectbox("Job", sched["jobs"], key="schedule-job", format_func=lambda j: (
+                f"{j['identifier']} · {local_time(j['local_start'], '%H:%M')} · {j['customer_name']} · "
+                f"{j['technician_name']}"))
+            active = [t for t in techs if t["active"]]
+            with st.form("job-change"):
+                c1, c2, c3, c4 = st.columns(4)
+                tech_index = next((i for i, t in enumerate(active) if t["id"] == job["technician_id"]), 0)
+                new_tech = c1.selectbox("Technician", active, index=tech_index, format_func=lambda t: t["name"])
+                start_local = datetime.fromisoformat(job["local_start"])
+                new_day = c2.date_input("Date", value=start_local.date())
+                new_time = c3.time_input("Start", value=start_local.time(), step=timedelta(minutes=30))
+                statuses = ["scheduled", "confirmed", "in_progress", "completed", "cancelled"]
+                new_status = c4.selectbox("Status", statuses, index=statuses.index(job["status"]))
+                override = st.checkbox("Allow outside working hours (dispatcher override)")
+                if st.form_submit_button("Save job"):
+                    start = datetime.combine(new_day, new_time, start_local.tzinfo)
+                    code, body = fsp_call("PUT", f"/api/jobs/{job['id']}", json={
+                        "technician_id": new_tech["id"], "scheduled_start": start.isoformat(),
+                        "status": new_status, "allow_outside_hours": override})
+                    if code == 200:
+                        st.session_state["notice"] = f"{job['identifier']} updated."
+                        st.rerun()
+                    st.error(f"Not saved: {body.get('detail')}")
+        else:
+            st.info("No jobs on this day.")
+
+        if user["role"] == "admin":
+            st.divider()
+            st.subheader("Technicians")
+            st.caption("Working hours are local time, one day per line, e.g. `mon 07:00-18:00`. Leave service ZIPs "
+                       "empty to cover the whole service area.")
+            for tech in techs + [None]:
+                new = tech is None
+                with st.form(f"tech-{'new' if new else tech['id']}"):
+                    st.markdown("**Add a technician**" if new else f"**{tech['name']}**")
+                    c1, c2 = st.columns(2)
+                    name = c1.text_input("Name", value="" if new else tech["name"])
+                    active_flag = c2.checkbox("Active", value=True if new else tech["active"])
+                    hours_text = st.text_area("Working hours", height=120, value="mon 08:00-17:00\ntue 08:00-17:00\n"
+                                              "wed 08:00-17:00\nthu 08:00-17:00\nfri 08:00-17:00" if new else
+                                              "\n".join(f"{d} {h[0]}-{h[1]}" for d, h in tech["working_hours"].items()))
+                    c3, c4 = st.columns(2)
+                    skills = c3.text_input("Skills (comma separated)", value="" if new else ", ".join(tech["skills"]))
+                    zips = c4.text_input("Service ZIPs (comma separated)",
+                                         value="" if new else ", ".join(tech["service_zips"]))
+                    if st.form_submit_button("Add technician" if new else "Save technician") and name:
+                        try:
+                            hours = parse_hours(hours_text)
+                        except ValueError:
+                            hours = None
+                        body = {"name": name, "working_hours": hours,
+                                "skills": [x.strip() for x in skills.split(",") if x.strip()],
+                                "service_zips": [x.strip() for x in zips.split(",") if x.strip()]}
+                        code, result = (fsp_call("POST", "/api/technicians", json=body) if new else
+                                        fsp_call("PUT", f"/api/technicians/{tech['id']}",
+                                                 json=body | {"active": active_flag}))
+                        if code in (200, 201):
+                            st.session_state["notice"] = f"Technician {name} saved."
+                            st.rerun()
+                        st.error(f"Not saved: {result.get('detail')}")
 
 if user["role"] != "admin":
     st.stop()
@@ -208,8 +356,6 @@ with views["Knowledge"], sessions()() as session:
             registry.reject(version, user["username"])
             session.commit()
             st.rerun()
-    if st.session_state.get("notice"):
-        st.success(st.session_state.pop("notice"))
 
     st.subheader("Documents")
     rows = []
