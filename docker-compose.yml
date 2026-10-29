@@ -97,6 +97,12 @@ services:
     depends_on:
       api: {condition: service_healthy}
 
+  sweeper:  # escalates approvals left undecided past their timeout (hourly)
+    <<: *serviceiq
+    command: ["sweep-loop"]
+    depends_on:
+      api: {condition: service_healthy}
+
   admin:
     <<: *serviceiq
     command: ["admin"]

@@ -396,3 +396,28 @@ def test_prices_come_from_the_price_book_in_effect_even_with_a_registry(env):
         books = [e.document_id for e in _documents(s, env.settings.data_dir, "cedar-ridge",
                                                    env.settings.serviceiq_as_of_date) if e.document_type == "price_book"]
     assert books == ["crc-price-book-2026"]
+
+
+# ---------------------------------------------------------------- M18: approval timeouts
+def test_overdue_approvals_are_escalated_once_and_stay_open(env):
+    from datetime import datetime, timedelta, timezone
+
+    from serviceiq.agent.sweep import sweep_approvals
+
+    submit(env, extra="Can I get a discount?")
+    with session_factory(env.engine)() as s:
+        approval = s.scalar(select(Approval))
+        request = s.get(ServiceRequest, approval.request_id)
+        env.fsp.customers[request.customer_ref]["email"] = "jordan@example.com"
+        created = approval.created_at.replace(tzinfo=timezone.utc)
+        assert sweep_approvals(s, env.settings, env.fsp, created + timedelta(hours=23)) == []  # not yet
+        done = sweep_approvals(s, env.settings, env.fsp, created + timedelta(hours=25))
+        assert len(done) == 1 and done[0]["customer_emailed"] and done[0]["ticket_id"]
+        ticket = s.get(Escalation, done[0]["ticket_id"])
+        assert ticket.priority == "P2" and "approval overdue" in ticket.reason
+        assert approval.status == "pending" and approval.escalated_at is not None  # an admin can still decide
+        assert sweep_approvals(s, env.settings, env.fsp, created + timedelta(hours=30)) == []  # escalated once
+    names = [p.name for p in env.outbox.glob("*.eml")]
+    assert any("URGENT-" in n for n in names) and any("CUSTOMER-" in n for n in names)
+    customer_mail = next(p for p in env.outbox.glob("*CUSTOMER-*.eml")).read_text(encoding="utf-8")
+    assert "jordan@example.com" in customer_mail and "will call you" in customer_mail

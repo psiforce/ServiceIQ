@@ -1,8 +1,8 @@
 """Create or update ServiceIQ secrets in Google Secret Manager without printing any secret value.
 
 Usage:  python deploy/gcp_secrets.py --project serviceiq-512906
-Reads API keys from .env; generates the database URL, widget keys and admin passwords on first run and keeps
-them in var/gcp/ (git-ignored) so they stay stable across re-runs.
+Reads API keys from .env; generates the database URLs, widget keys, field-service API keys and admin passwords on
+first run and keeps them in var/gcp/ (git-ignored) so they stay stable across re-runs. See deploy/DEPLOY.md.
 """
 import argparse
 import json
@@ -65,6 +65,9 @@ def main():
     socket = f"/cloudsql/{args.project}:{args.region}:{args.instance}"
     widget_keys = stable("widget_keys.json", lambda: json.dumps(
         {t: f"wk_{t}_{secrets.token_urlsafe(24)}" for t in TENANTS}, indent=2))
+    fsp_keys = stable("fsp_keys.json", lambda: json.dumps(
+        {t: f"fsp_{t}_{secrets.token_urlsafe(24)}" for t in TENANTS}, indent=2))
+    fsp_db_password = stable("fsp_db_password", lambda: secrets.token_urlsafe(24))
     admin_creds = stable("admin_credentials.json", lambda: json.dumps(
         {u: {"tenant": t, "role": r, "password": secrets.token_urlsafe(14)} for u, (t, r) in ADMINS.items()}, indent=2))
 
@@ -74,6 +77,9 @@ def main():
         "langsmith-api-key": env.get("LANGSMITH_API_KEY", ""),
         "database-url": f"postgresql+psycopg://serviceiq:{db_password}@/serviceiq?host={socket}",
         "chat-widget-keys": json.dumps(json.loads(widget_keys)),
+        # field-service platform: its own database and a normal role, so row-level security applies
+        "fsp-database-url": f"postgresql+psycopg://fsp_app:{fsp_db_password}@/fieldservice?host={socket}",
+        "fsp-api-keys": json.dumps(json.loads(fsp_keys)),
         "admin-passwords": json.dumps({u: c["password"] for u, c in json.loads(admin_creds).items()}),
     }
     for name, value in values.items():

@@ -17,7 +17,7 @@ from serviceiq.config import PROJECT_ROOT, get_settings  # noqa: E402
 from serviceiq.storage.auth import authenticate  # noqa: E402
 from serviceiq.storage.db import make_engine, session_factory  # noqa: E402
 from serviceiq.storage.models import (Conversation, DocumentRecord, DocumentVersionRecord, Escalation,  # noqa: E402
-                                      Feedback, Message, ServiceRequest, Approval)
+                                      Feedback, Message, ServiceRequest, Approval, ToolCall)
 from serviceiq.storage import registry  # noqa: E402
 from serviceiq.agent.schema import EQUIPMENT_LABELS, summary  # noqa: E402
 
@@ -542,3 +542,24 @@ with views["Analytics"], sessions()() as session:
     for t in gaps:
         first = next((x["text"] for x in t.handoff_packet.get("transcript", []) if x["role"] == "customer"), "")
         st.caption(f"• {t.created_at:%b %d}: \"{first}\" ({t.resolution or 'no notes'})")
+
+    # Phase 3 success measure: bookings the agent made that dispatchers left as they were
+    st.markdown("**Agent bookings (30 days)**")
+    booked = list(session.scalars(select(ToolCall).where(ToolCall.tenant_id == tenant_id, ToolCall.tool == "book_job",
+                                                         ToolCall.ok.is_(True), ToolCall.created_at >= since)))
+    kept = changed = 0
+    for call in booked[:200]:
+        result = call.result or {}
+        code, job = fsp_call("GET", f"/api/jobs/{result.get('job_id')}")
+        if code != 200:
+            continue
+        same = (job["status"] != "cancelled" and job["scheduled_start"] == datetime.fromisoformat(result["start"])
+                .astimezone(timezone.utc).isoformat() and job["technician_name"] == result.get("technician_name"))
+        kept, changed = kept + same, changed + (not same)
+    pending_approvals = session.scalar(select(func.count()).select_from(Approval).where(
+        Approval.tenant_id == tenant_id, Approval.status == "pending"))
+    e1, e2, e3 = st.columns(3)
+    e1.metric("Booked by the agent", len(booked), help="Includes bookings an admin approved")
+    e2.metric("Kept unchanged by dispatchers", f"{kept / (kept + changed):.0%}" if kept + changed else "-",
+              help=f"{kept} kept, {changed} moved, reassigned or cancelled. Target: 9 out of 10.")
+    e3.metric("Approvals waiting", pending_approvals)

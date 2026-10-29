@@ -25,8 +25,10 @@ from serviceiq.storage.db import make_engine, provision_tenant, session_factory
 from serviceiq.storage.models import Conversation, ServiceRequest, ToolCall
 
 TARGETS = {"outcome_accuracy": 0.9, "completion_rate": 0.9, "field_accuracy": 0.9, "emergency_exit_rate": 1.0,
-           "approval_routing": 1.0, "pii_leaks": 0, "policy_violations": 0}
-AT_MOST = {"pii_leaks", "policy_violations"}  # counts that must stay at or below their target
+           "approval_routing": 1.0, "race_handled": 1.0, "pii_leaks": 0, "policy_violations": 0, "double_bookings": 0,
+           "unaudited_jobs": 0, "agent_seconds_to_book_p95": 300}
+# counts and times that must stay at or below their target
+AT_MOST = {"pii_leaks", "policy_violations", "double_bookings", "unaudited_jobs", "agent_seconds_to_book_p95"}
 
 
 @dataclass
@@ -43,6 +45,7 @@ class DialogueResult:
     missing_phrases: list = field(default_factory=list)
     statuses: list = field(default_factory=list)
     cost_usd: float = 0.0
+    agent_seconds: float = 0.0  # the agent's own processing time (scripted customers reply instantly)
     transcript: list = field(default_factory=list)
 
 
@@ -88,6 +91,7 @@ def run_dialogue(agent: Agent, sessions, row: dict, contact: dict) -> DialogueRe
             history.append((message, turn.answer))
         result.statuses.append(turn.status)
         result.cost_usd += turn.cost_usd
+        result.agent_seconds += turn.latency_ms.get("total", 0) / 1000
         result.transcript.append({"customer": message if form is None else "[contact form]", "status": turn.status,
                                   "assistant": turn.log_answer})
     result.outcome = turn.status if turn else "none"
@@ -157,8 +161,78 @@ def run_intake_eval(settings: Settings | None = None, progress=None) -> tuple[li
         results.append(run_dialogue(agent, sessions, row, contact))
         if progress:
             progress(results[-1])
+    race = run_race(agent, sessions)
     leaks = pii_leaks(sessions, contacts)
-    return results, compute_metrics(results, leaks, policy_violations(sessions))
+    metrics = compute_metrics(results, leaks, policy_violations(sessions))
+    metrics |= {"race_handled": 1.0 if race["handled"] else 0.0, "race_detail": race}
+    metrics |= calendar_checks(sessions, agent.fsp)
+    return results, metrics
+
+
+RACE_MESSAGES = ["My furnace is blowing cold air, can someone come out? 45801", "It's a Carrier, no rush, any time",
+                 "Here are my contact details.", "Yes, please send it."]
+
+
+def run_race(agent: Agent, sessions) -> dict:
+    """Two customers are offered the same times; both pick option 1. The second must be offered fresh times
+    (the platform refuses the double booking), then book one of those."""
+    convs = {"race-a": {"name": "Race A", "phone": "555-010-7001", "street": "1 Race St", "city": "Maple Falls"},
+             "race-b": {"name": "Race B", "phone": "555-010-7002", "street": "2 Race St", "city": "Maple Falls"}}
+    turns = {}
+    for conv, contact in convs.items():
+        with sessions() as s:
+            s.add(Conversation(conversation_id=conv, tenant_id="cedar-ridge"))
+            s.commit()
+        for message in RACE_MESSAGES:
+            with sessions() as s:
+                turns[conv] = agent.handle(s, "cedar-ridge", conv, message,
+                                           contact=contact if "contact" in message else None)
+                s.commit()
+    offered = {conv: turns[conv].options[:1] for conv in convs}
+    statuses = []
+    for conv in convs:
+        with sessions() as s:
+            turn = agent.handle(s, "cedar-ridge", conv, "1")
+            s.commit()
+        statuses.append(turn.status)
+    second = turn
+    if second.status == "proposing":
+        with sessions() as s:
+            second = agent.handle(s, "cedar-ridge", "race-b", "1")
+            s.commit()
+        statuses.append(second.status)
+    same_first = offered["race-a"] == offered["race-b"]
+    handled = statuses[0] == "booked" and second.status == "booked" and (
+        not same_first or statuses[1] == "proposing")
+    return {"handled": handled, "same_first_option": same_first, "statuses": statuses}
+
+
+def calendar_checks(sessions, fsp) -> dict:
+    """Read the platform's schedule back: no technician double-booked, and every job has an audited booking."""
+    from datetime import date, timedelta
+
+    from serviceiq.storage.models import ToolCall
+    jobs = []
+    for tenant in fsp.keys:
+        code, body = fsp.call(tenant, "GET", "/api/schedule", params={
+            "date_from": (date.today() - timedelta(days=2)).isoformat(),
+            "date_to": (date.today() + timedelta(days=28)).isoformat()})
+        jobs += [j | {"tenant": tenant} for j in body.get("jobs", [])] if code == 200 else []
+    overlaps = 0
+    by_tech: dict = {}
+    for j in jobs:
+        by_tech.setdefault((j["tenant"], j["technician_id"]), []).append(j)
+    for tech_jobs in by_tech.values():
+        tech_jobs.sort(key=lambda j: j["scheduled_start"])
+        for a, b in zip(tech_jobs, tech_jobs[1:]):
+            from datetime import datetime
+            end_a = datetime.fromisoformat(a["scheduled_start"]) + timedelta(minutes=a["duration"])
+            overlaps += end_a > datetime.fromisoformat(b["scheduled_start"])
+    with sessions() as s:
+        audited = {(c.result or {}).get("job_id") for c in s.scalars(select(ToolCall).where(
+            ToolCall.tool == "book_job", ToolCall.ok.is_(True)))}
+    return {"jobs_booked": len(jobs), "double_bookings": overlaps,
+            "unaudited_jobs": sum(1 for j in jobs if j["id"] not in audited)}
 
 
 def policy_violations(sessions) -> list[str]:
@@ -175,6 +249,7 @@ def compute_metrics(results: list[DialogueResult], leaks: list[str], violations:
     approvals = [r for r in results if r.expected == "awaiting_approval"]
     emergencies = [r for r in results if r.expected == "emergency"]
     turns = [r.customer_turns for r in submit if r.outcome == "booked"]
+    seconds = sorted(r.agent_seconds for r in submit if r.outcome == "booked")
     return {
         "dialogues": len(results),
         "outcome_accuracy": rate(results, lambda r: r.outcome == r.expected),
@@ -186,6 +261,8 @@ def compute_metrics(results: list[DialogueResult], leaks: list[str], violations:
         "emergency_exit_rate": rate(emergencies, lambda r: r.outcome == "emergency"),
         "pii_leaks": len(leaks),
         "median_customer_turns_to_book": statistics.median(turns) if turns else None,
+        "agent_seconds_to_book_median": round(statistics.median(seconds), 1) if seconds else None,
+        "agent_seconds_to_book_p95": round(seconds[max(0, round(0.95 * len(seconds)) - 1)], 1) if seconds else None,
         "avg_cost_per_dialogue": statistics.mean(r.cost_usd for r in results) if results else 0.0,
         "total_cost": sum(r.cost_usd for r in results),
         "leak_details": leaks,
@@ -203,7 +280,9 @@ def write_report(results: list[DialogueResult], metrics: dict, reports_dir: Path
         target_shown = str(target) if key in AT_MOST else f"≥ {target:.0%}"
         lines.append(f"| {key.replace('_', ' ')} | {shown} | {target_shown} | {'✅' if met else '❌'} |")
     lines += ["", f"Also: pass rate {metrics['pass_rate']:.1%} · median customer messages to book "
-                  f"{metrics['median_customer_turns_to_book']} · average cost per dialogue "
+                  f"{metrics['median_customer_turns_to_book']} · agent time to book: median "
+                  f"{metrics['agent_seconds_to_book_median']} s · jobs booked {metrics['jobs_booked']} · race "
+                  f"{metrics['race_detail']['statuses']} · average cost per dialogue "
                   f"${metrics['avg_cost_per_dialogue']:.4f} · total ${metrics['total_cost']:.3f}", "",
               "| Case | Tenant | Expected | Outcome | Turns | Fields | Passed |", "|---|---|---|---|---|---|---|"]
     for r in results:

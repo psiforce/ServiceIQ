@@ -552,6 +552,25 @@ def purge(days: int = typer.Option(None, help="Retention in days (default: RETEN
     console.print(f"Purged {removed} conversation(s) older than {days or settings.retention_days} days.")
 
 
+@app.command("sweep-approvals")
+def sweep_approvals_command(now: str = typer.Option(None, help="Pretend it is this UTC time (ISO), for testing.")):
+    """M18: escalate approvals left undecided past their timeout (reminder, P2 ticket, customer told). Run hourly."""
+    from datetime import datetime, timezone
+
+    from serviceiq.agent.fieldservice_client import make_field_service
+    from serviceiq.agent.sweep import sweep_approvals
+    from serviceiq.storage.db import make_engine, session_factory
+
+    settings = get_settings()
+    when = datetime.fromisoformat(now).replace(tzinfo=timezone.utc) if now else None
+    with session_factory(make_engine(settings.database_url))() as session:
+        results = sweep_approvals(session, settings, make_field_service(settings), when)
+    for r in results:
+        console.print(f"{r['tenant_id']}: approval {r['approval_id'][:8]} escalated after {r['waited_hours']} h "
+                      f"(ticket {r['ticket_id'] or '-'}, customer emailed: {r['customer_emailed']})")
+    console.print(f"{len(results)} approval(s) escalated.")
+
+
 @app.command("evaluate-intake")
 def evaluate_intake():
     """M14/M17: run the scripted intake and booking dialogues through the agent; writes reports/intake_<date>.md."""
@@ -569,6 +588,9 @@ def evaluate_intake():
     console.print(f"\nOutcome accuracy {metrics['outcome_accuracy']:.1%} · completion {metrics['completion_rate']:.1%} · "
                   f"fields {metrics['field_accuracy']:.1%} · emergencies {metrics['emergency_exit_rate']:.0%} · "
                   f"approvals {metrics['approval_routing']:.0%} · policy violations {metrics['policy_violations']} · "
+                  f"double bookings {metrics['double_bookings']} · unaudited jobs {metrics['unaudited_jobs']} · "
+                  f"race {'ok' if metrics['race_handled'] else 'FAILED'} · "
+                  f"agent time to book p95 {metrics['agent_seconds_to_book_p95']} s · "
                   f"contact leaks {metrics['pii_leaks']} · cost ${metrics['total_cost']:.3f}")
     console.print(f"Report: {out.relative_to(PROJECT_ROOT)}")
 
