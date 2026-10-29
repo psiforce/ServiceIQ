@@ -81,6 +81,7 @@ class ChatResponse(BaseModel):
     stage: str | None = None          # agent: idle | collecting | confirming | submitted | closed
     needs_contact: bool = False       # agent: show the contact form
     service_request: dict | None = None
+    options: list[str] = []           # agent: visit times offered; the customer replies 1, 2 or 3
 
 
 class CallbackRequest(BaseModel):
@@ -234,7 +235,7 @@ def create_app(settings: Settings | None = None, assistant=None, engine=None, ag
             citations=[CitationOut(n=c.n, title=c.title, section=c.section, source=c.source,
                                    document_id=c.document_id, snippet=c.snippet) for c in response.citations],
             stage=getattr(response, "stage", None), needs_contact=getattr(response, "needs_contact", False),
-            service_request=getattr(response, "service_request", None))
+            service_request=getattr(response, "service_request", None), options=getattr(response, "options", []))
 
     @app.post("/v1/escalations", response_model=CallbackResponse)
     def request_callback(body: CallbackRequest, t: Tenant = Depends(tenant), session: Session = Depends(db)):

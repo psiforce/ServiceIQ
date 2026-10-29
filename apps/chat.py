@@ -26,6 +26,9 @@ STATUS_BANNER = {
     "not_eligible": ("warning", "📍", "We can't set up this visit."),
     "confirming": ("info", "📝", "Please check your service request."),
     "submitted": ("success", "✅", "Service request sent to the office."),
+    "proposing": ("info", "🗓️", "Pick a time for your visit."),
+    "booked": ("success", "✅", "Your visit is booked."),
+    "awaiting_approval": ("info", "⏳", "The office will review your request before booking."),
 }
 SUGGESTIONS = ["How much is a diagnostic visit?", "Is my compressor under warranty?",
                "Do you repair Carrier AC units?", "My AC isn't cooling. Can someone come out?"]
@@ -73,6 +76,12 @@ def render_intake_controls(r, index: int, tenant: str) -> None:
                     "message": "Here are my contact details.",
                     "contact": {"name": name, "phone": phone, "email": email, "street": street,
                                 "city": city_value, "zip": zip_value if len(zip_value) == 5 else ""}}
+                st.rerun()
+    elif getattr(r, "options", None):
+        columns = st.columns(len(r.options))
+        for n, (column, option) in enumerate(zip(columns, r.options), 1):
+            if column.button(option, key=f"slot-{index}-{n}", width="stretch", type="primary" if n == 1 else "secondary"):
+                st.session_state[f"pending-{tenant}"] = {"message": str(n)}
                 st.rerun()
     elif r.status == "confirming":
         confirm, edit = st.columns(2)

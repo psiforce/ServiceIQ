@@ -95,15 +95,15 @@ def notify(settings: Settings, profile: TenantProfile, ticket: Escalation) -> st
 
 
 def notify_service_request(settings: Settings, profile: TenantProfile, request: ServiceRequest, contact: dict,
-                           summary: str) -> str:
-    """Tell the office a new service request is waiting (Phase 2: a person books the appointment)."""
+                           summary: str, next_step: str = "Reply to the customer to book a time; the assistant does "
+                                                          "not confirm appointments.") -> str:
+    """Tell the office a new service request is in, and what happens next (offered times, approval, or a call)."""
     lines = [f"Service request: {request.request_id}", f"Conversation: {request.conversation_id}",
              f"Customer record (field-service platform): {request.customer_ref}", "",
              "Customer contact:", f"  Name: {contact.get('name') or '-'}", f"  Phone: {contact.get('phone') or '-'}",
              f"  Email: {contact.get('email') or '-'}",
              f"  Address: {', '.join(x for x in (contact.get('street'), contact.get('city'), contact.get('zip')) if x)}",
-             "", "Request:", summary, "", "Reply to the customer to book a time; the assistant does not confirm "
-             "appointments."]
+             "", "Request:", summary, "", next_step]
     msg = EmailMessage()
     msg["Subject"] = f"[REQUEST] ServiceIQ service request {request.request_id[:8]}: {request.payload.get('equipment_type') or 'HVAC'}"
     msg["From"] = settings.escalation_from_email or "serviceiq@localhost"

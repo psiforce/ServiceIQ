@@ -1,9 +1,11 @@
-"""M14: intake evaluation. Runs the scripted dialogues in data/eval/intake_dialogues.csv through the real agent
-(guard, extraction and Q&A use the live models; the field-service platform is an in-memory stand-in).
+"""M14/M17: intake and booking evaluation. Runs the scripted dialogues in data/eval/intake_dialogues.csv through
+the real agent: guard, extraction and Q&A use the live models, and the field-service platform runs in-process
+on a temporary database seeded from data/tenants/*/fieldservice.json.
 
 For each dialogue the scripted customer messages are sent in order. When the agent asks for contact details,
-the contact form is submitted; when the scripted messages run out at the summary, the customer replies "yes".
-Checks: final outcome, extracted fields, required phrases, and that no contact detail reaches stored rows.
+the contact form is submitted; at the summary the customer replies "yes"; when times are offered the customer
+picks the first one. Checks: final outcome (booked, awaiting_approval, not_eligible, ...), extracted fields and
+flags, required phrases, that nothing needing approval was booked, and that no contact detail reaches stored rows.
 """
 import csv
 import json
@@ -17,13 +19,14 @@ from langgraph.checkpoint.memory import InMemorySaver
 from sqlalchemy import select
 
 from serviceiq.agent import Agent
-from serviceiq.agent.fieldservice_client import MemoryFieldService
-from serviceiq.config import Settings, load_settings
+from serviceiq.agent.fieldservice_client import HttpFieldService
+from serviceiq.config import PROJECT_ROOT, Settings, load_settings
 from serviceiq.storage.db import make_engine, provision_tenant, session_factory
 from serviceiq.storage.models import Conversation, ServiceRequest, ToolCall
 
 TARGETS = {"outcome_accuracy": 0.9, "completion_rate": 0.9, "field_accuracy": 0.9, "emergency_exit_rate": 1.0,
-           "pii_leaks": 0}
+           "approval_routing": 1.0, "pii_leaks": 0, "policy_violations": 0}
+AT_MOST = {"pii_leaks", "policy_violations"}  # counts that must stay at or below their target
 
 
 @dataclass
@@ -73,6 +76,8 @@ def run_dialogue(agent: Agent, sessions, row: dict, contact: dict) -> DialogueRe
             message, form, confirm = "Here are my contact details.", contact, None
         elif turn is not None and turn.status == "confirming":
             message, form, confirm = "Yes, that's right. Please send it.", None, None
+        elif turn is not None and turn.status == "proposing":
+            message, form, confirm = "1", None, None
         else:
             break
         result.customer_turns += 1
@@ -116,6 +121,23 @@ def pii_leaks(sessions, contacts: list[dict]) -> list[str]:
     return leaks
 
 
+def local_field_service(work: Path) -> HttpFieldService:
+    """The real field-service API, in-process, on a fresh database with each tenant's contractor config."""
+    from fastapi.testclient import TestClient
+
+    from fieldservice.app import create_app
+    from fieldservice.config import FSPSettings
+    from fieldservice.db import add_org, make_engine as fsp_engine, session_factory as fsp_sessions
+
+    url = f"sqlite:///{(work / 'fsp.db').as_posix()}"
+    engine = fsp_engine(url)
+    keys = {}
+    for config_path in sorted((PROJECT_ROOT / "data" / "tenants").glob("*/fieldservice.json")):
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        keys[config["org_id"]] = add_org(fsp_sessions(engine), config)
+    return HttpFieldService("", keys, http=TestClient(create_app(FSPSettings(fsp_database_url=url), engine=engine)))
+
+
 def run_intake_eval(settings: Settings | None = None, progress=None) -> tuple[list[DialogueResult], dict]:
     base = settings or load_settings()
     work = Path(tempfile.mkdtemp(prefix="serviceiq-intake-"))
@@ -126,7 +148,7 @@ def run_intake_eval(settings: Settings | None = None, progress=None) -> tuple[li
     with sessions() as s:
         for tenant in ("cedar-ridge", "harbor-point"):
             provision_tenant(s, tenant, tenant)
-    agent = Agent(settings, fsp=MemoryFieldService(), checkpointer=InMemorySaver())
+    agent = Agent(settings, fsp=local_field_service(work), checkpointer=InMemorySaver())
     results, contacts = [], []
     for n, row in enumerate(load_dialogues(settings.data_dir), 1):
         contact = {"name": f"Eval Customer {row['case_id']}", "phone": f"555-010-{n:04d}", "email": "",
@@ -136,24 +158,34 @@ def run_intake_eval(settings: Settings | None = None, progress=None) -> tuple[li
         if progress:
             progress(results[-1])
     leaks = pii_leaks(sessions, contacts)
-    return results, compute_metrics(results, leaks)
+    return results, compute_metrics(results, leaks, policy_violations(sessions))
 
 
-def compute_metrics(results: list[DialogueResult], leaks: list[str]) -> dict:
+def policy_violations(sessions) -> list[str]:
+    """Requests that needed an approver (discount, warranty, after hours) but were booked anyway."""
+    with sessions() as s:
+        return [r.request_id for r in s.scalars(select(ServiceRequest))
+                if r.payload.get("flags") and r.job_ref]
+
+
+def compute_metrics(results: list[DialogueResult], leaks: list[str], violations: list[str] | None = None) -> dict:
     def rate(rows, ok):
         return sum(1 for r in rows if ok(r)) / len(rows) if rows else None
-    submit = [r for r in results if r.expected == "submitted"]
+    submit = [r for r in results if r.expected == "booked"]
+    approvals = [r for r in results if r.expected == "awaiting_approval"]
     emergencies = [r for r in results if r.expected == "emergency"]
-    turns = [r.customer_turns for r in submit if r.outcome == "submitted"]
+    turns = [r.customer_turns for r in submit if r.outcome == "booked"]
     return {
         "dialogues": len(results),
         "outcome_accuracy": rate(results, lambda r: r.outcome == r.expected),
         "pass_rate": rate(results, lambda r: r.passed),
-        "completion_rate": rate(submit, lambda r: r.outcome == "submitted"),
+        "completion_rate": rate(submit, lambda r: r.outcome == "booked"),
+        "approval_routing": rate(approvals, lambda r: r.outcome == "awaiting_approval"),
+        "policy_violations": len(violations or []),
         "field_accuracy": (sum(r.fields_correct for r in results) / max(1, sum(r.fields_expected for r in results))),
         "emergency_exit_rate": rate(emergencies, lambda r: r.outcome == "emergency"),
         "pii_leaks": len(leaks),
-        "median_customer_turns_to_submit": statistics.median(turns) if turns else None,
+        "median_customer_turns_to_book": statistics.median(turns) if turns else None,
         "avg_cost_per_dialogue": statistics.mean(r.cost_usd for r in results) if results else 0.0,
         "total_cost": sum(r.cost_usd for r in results),
         "leak_details": leaks,
@@ -166,12 +198,12 @@ def write_report(results: list[DialogueResult], metrics: dict, reports_dir: Path
              "", "| Metric | Result | Target | Met |", "|---|---|---|---|"]
     for key, target in TARGETS.items():
         value = metrics[key]
-        met = (value <= target) if key == "pii_leaks" else (value is not None and value >= target)
-        shown = str(value) if key == "pii_leaks" else (f"{value:.1%}" if value is not None else "-")
-        target_shown = str(target) if key == "pii_leaks" else f"≥ {target:.0%}"
+        met = (value <= target) if key in AT_MOST else (value is not None and value >= target)
+        shown = str(value) if key in AT_MOST else (f"{value:.1%}" if value is not None else "-")
+        target_shown = str(target) if key in AT_MOST else f"≥ {target:.0%}"
         lines.append(f"| {key.replace('_', ' ')} | {shown} | {target_shown} | {'✅' if met else '❌'} |")
-    lines += ["", f"Also: pass rate {metrics['pass_rate']:.1%} · median customer messages to submit "
-                  f"{metrics['median_customer_turns_to_submit']} · average cost per dialogue "
+    lines += ["", f"Also: pass rate {metrics['pass_rate']:.1%} · median customer messages to book "
+                  f"{metrics['median_customer_turns_to_book']} · average cost per dialogue "
                   f"${metrics['avg_cost_per_dialogue']:.4f} · total ${metrics['total_cost']:.3f}", "",
               "| Case | Tenant | Expected | Outcome | Turns | Fields | Passed |", "|---|---|---|---|---|---|---|"]
     for r in results:

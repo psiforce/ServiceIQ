@@ -359,13 +359,15 @@ def create_app(settings: FSPSettings | None = None, engine=None) -> FastAPI:
     @app.get("/api/availability")
     def availability(date_from: date, date_to: date, service_type_id: str | None = None,
                      service_code: str | None = None, zip: str | None = None, duration: int | None = None,
-                     limit: int = 20, lead_minutes: int = 60, s: OrgScope = Depends(scope)):
-        """Free start times (UTC and org-local) for a visit, earliest first, with the technician who would go."""
+                     skill: str | None = None, limit: int = 20, lead_minutes: int = 60, s: OrgScope = Depends(scope)):
+        """Free start times (UTC and org-local) for a visit, earliest first, with the technician who would go.
+        `skill` adds an equipment skill to the service type's own (a boiler diagnostic needs a boiler technician)."""
         tz = org_tz(s)
         start, end = local_range(tz, date_from, date_to)
         st = service_type(s, service_type_id, service_code)
         minutes = duration or (st.default_duration if st else 60)
-        techs = [t for t in s.session.scalars(s.select(Technician)) if can_do(t, st.skill if st else "", zip)]
+        skills = [x for x in ((st.skill if st else ""), skill or "") if x]
+        techs = [t for t in s.session.scalars(s.select(Technician)) if all(can_do(t, x, zip) for x in skills or [""])]
         jobs = tech_jobs(s, [t.id for t in techs], start, end)
         not_before = max(start, datetime.now(timezone.utc) + timedelta(minutes=lead_minutes))
         slots = free_slots(techs, jobs, date_from, date_to, minutes, tz, not_before, max(1, min(limit, 100)))

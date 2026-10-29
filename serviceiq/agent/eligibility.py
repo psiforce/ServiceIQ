@@ -34,10 +34,14 @@ class Eligibility:
 
 
 def _documents(session: Session | None, data_dir, tenant_id: str, as_of: date) -> list[ManifestEntry]:
+    """Approved documents in effect on `as_of`, newest first (an expired price book is never used)."""
     if session is not None and registry.has_registry(session, tenant_id):
-        return registry.current_entries(session, tenant_id)
-    return [e for e in read_manifest(data_dir, tenant_id) if e.approval_status == "approved"
-            and e.effective_date <= as_of.isoformat() and (not e.expiry_date or as_of.isoformat() <= e.expiry_date)]
+        entries = registry.current_entries(session, tenant_id)
+    else:
+        entries = [e for e in read_manifest(data_dir, tenant_id) if e.approval_status == "approved"]
+    day = as_of.isoformat()
+    live = [e for e in entries if e.effective_date <= day and (not e.expiry_date or day <= e.expiry_date)]
+    return sorted(live, key=lambda e: e.effective_date, reverse=True)
 
 
 def _rows(entry: ManifestEntry) -> list[dict]:

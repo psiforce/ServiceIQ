@@ -24,6 +24,13 @@ class FieldService(Protocol):
     def find_or_create_customer(self, tenant_id: str, contact: dict, idempotency_key: str) -> str: ...
     def add_equipment(self, tenant_id: str, customer_ref: str, draft: dict, idempotency_key: str) -> str | None: ...
     def get_customer(self, tenant_id: str, customer_ref: str) -> dict | None: ...
+    def service_types(self, tenant_id: str) -> list[dict]: ...
+    def availability(self, tenant_id: str, **params) -> list[dict]: ...
+    def create_job(self, tenant_id: str, body: dict, idempotency_key: str) -> tuple[int, dict]: ...
+
+
+class SlotTaken(RuntimeError):
+    """The slot was booked by someone else between offering it and booking it."""
 
 
 class HttpFieldService:
@@ -82,6 +89,22 @@ class HttpFieldService:
         response = self._request(tenant_id, "GET", f"/api/customers/{customer_ref}")
         return response.json() if response.status_code == 200 else None
 
+    def service_types(self, tenant_id: str) -> list[dict]:
+        code, body = self.call(tenant_id, "GET", "/api/service-types")
+        if code != 200:
+            raise FieldServiceError(f"service types unavailable ({code})")
+        return body["service_types"]
+
+    def availability(self, tenant_id: str, **params) -> list[dict]:
+        code, body = self.call(tenant_id, "GET", "/api/availability",
+                               params={k: v for k, v in params.items() if v not in (None, "")})
+        if code != 200:
+            raise FieldServiceError(f"availability unavailable ({code}: {body.get('detail')})")
+        return body["slots"]
+
+    def create_job(self, tenant_id: str, body: dict, idempotency_key: str) -> tuple[int, dict]:
+        return self.call(tenant_id, "POST", "/api/jobs", idempotency_key, json=body)
+
     def call(self, tenant_id: str, method: str, path: str, idempotency_key: str | None = None,
              **kwargs) -> tuple[int, dict]:
         """Any platform endpoint (scheduling, technicians): (status code, JSON body)."""
@@ -99,7 +122,43 @@ class MemoryFieldService:
     def __init__(self, fail: bool = False):
         self.customers: dict[str, dict] = {}
         self.assets: list[dict] = []
+        self.jobs: list[dict] = []
         self.fail = fail
+
+    def service_types(self, tenant_id: str) -> list[dict]:
+        return [{"id": "st-diag", "code": "DIAG-01", "name": "Diagnostic service call", "skill": "",
+                 "default_duration": 90, "default_price": 89},
+                {"id": "st-tune-ac", "code": "TUNE-AC", "name": "AC tune-up", "skill": "ac",
+                 "default_duration": 90, "default_price": 129}]
+
+    def availability(self, tenant_id: str, **params) -> list[dict]:
+        """A week of 08:00, 10:00 and 14:00 (New York, UTC-5) with one technician, minus booked starts."""
+        if self.fail:
+            raise FieldServiceError("field-service platform unreachable")
+        from datetime import date, datetime, timedelta, timezone
+        tz = timezone(timedelta(hours=-5))
+        taken = {j["scheduled_start"] for j in self.jobs if j["tenant_id"] == tenant_id}
+        slots = []
+        for offset in range(1, 8):
+            day = date.fromisoformat(params["date_from"]) + timedelta(days=offset)
+            for hour in (8, 10, 14):
+                local = datetime(day.year, day.month, day.day, hour, tzinfo=tz)
+                start = local.astimezone(timezone.utc).isoformat()
+                if start not in taken:
+                    slots.append({"start": start, "local_start": local.isoformat(), "technician_id": "tech-1",
+                                  "technician_name": "Dana Whitfield"})
+        return slots[: params.get("limit", 20)]
+
+    def create_job(self, tenant_id: str, body: dict, idempotency_key: str) -> tuple[int, dict]:
+        for job in self.jobs:
+            if job["key"] == idempotency_key:
+                return 201, job
+            if job["tenant_id"] == tenant_id and job["scheduled_start"] == body["scheduled_start"]:
+                return 409, {"detail": "technician already has a job at that time"}
+        job = {"id": str(uuid.uuid4()), "identifier": f"JOB-{len(self.jobs) + 1}", "tenant_id": tenant_id,
+               "key": idempotency_key, "technician_name": "Dana Whitfield", **body}
+        self.jobs.append(job)
+        return 201, job
 
     def find_or_create_customer(self, tenant_id: str, contact: dict, idempotency_key: str) -> str:
         if self.fail:

@@ -52,8 +52,10 @@ def run_intake(env):
 def test_intake_through_the_api_with_contact_form_and_confirm_button(env):
     conv, summary = run_intake(env)
     assert "Jordan Lee" in summary["answer"]  # shown to the customer...
-    done = chat(env, {"message": "Confirm", "conversation_id": conv, "confirm": True})
-    assert done["status"] == "submitted" and done["stage"] == "submitted" and done["service_request"]["id"]
+    offered = chat(env, {"message": "Confirm", "conversation_id": conv, "confirm": True})
+    assert offered["status"] == "proposing" and len(offered["options"]) == 3 and offered["service_request"]["id"]
+    done = chat(env, {"message": "1", "conversation_id": conv})
+    assert done["status"] == "booked" and done["stage"] == "booked"
     with session_factory(env.engine)() as s:
         stored = " ".join(m.content for m in s.scalars(select(Message)))
         request = s.scalar(select(ServiceRequest))

@@ -47,7 +47,7 @@ class ServiceIQClient:
             citations=[SimpleNamespace(**c) for c in data["citations"]],
             escalation=data["escalation"], cost_usd=0.0, latency_ms={"total": data["latency_ms"]}, debug={},
             stage=data.get("stage"), needs_contact=data.get("needs_contact", False),
-            service_request=data.get("service_request"))
+            service_request=data.get("service_request"), options=data.get("options", []))
 
     def callback(self, conversation_id: str, message_id: str | None, name: str, phone: str,
                  preferred_time: str | None = None) -> dict:

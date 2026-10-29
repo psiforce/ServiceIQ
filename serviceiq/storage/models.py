@@ -156,7 +156,7 @@ class ServiceRequest(Base):
     customer_ref: Mapped[str] = mapped_column(String(64))  # customer ID in the field-service platform
     payload: Mapped[dict] = mapped_column(JSON)            # equipment, symptoms, urgency, windows; no contact details
     schema_version: Mapped[str] = mapped_column(String(8), default="1.0")
-    status: Mapped[str] = mapped_column(String(16), default="new")  # new | contacted | scheduled | closed
+    status: Mapped[str] = mapped_column(String(16), default="new")  # new|needs_approval|contacted|scheduled|closed
     staff_notes: Mapped[str | None] = mapped_column(Text)
     job_ref: Mapped[str | None] = mapped_column(String(64))  # the booked job in the field-service platform (M16)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)

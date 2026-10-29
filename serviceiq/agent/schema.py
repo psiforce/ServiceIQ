@@ -44,6 +44,7 @@ class ServiceRequestV1(BaseModel):
     notes: str | None = None
     service_area: str | None = None  # Core | Extended (from the eligibility check)
     trip_fee_usd: int | None = None
+    flags: list[str] = Field(default_factory=list)  # discount_or_quote, warranty_claim, after_hours: need approval
 
 
 def missing_fields(draft: dict) -> list[str]:
@@ -68,6 +69,10 @@ def summary(draft: dict, contact: dict | None = None) -> str:
                                                              "trip fee)" if draft.get("trip_fee_usd") else "")]
     if draft.get("notes"):
         lines.append(f"- Notes: {draft['notes']}")
+    if draft.get("flags"):
+        asks = {"discount_or_quote": "discount or guaranteed price", "warranty_claim": "warranty coverage",
+                "after_hours": "after-hours visit"}
+        lines.append(f"- Office review needed for: {', '.join(asks.get(f, f) for f in draft['flags'])}")
     if contact:
         address = ", ".join(x for x in (contact.get("street"), contact.get("city"), contact.get("zip")) if x)
         lines += [f"- Name: {contact.get('name')}", f"- Phone: {contact.get('phone')}",

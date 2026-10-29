@@ -17,7 +17,7 @@ from serviceiq.config import PROJECT_ROOT, get_settings  # noqa: E402
 from serviceiq.storage.auth import authenticate  # noqa: E402
 from serviceiq.storage.db import make_engine, session_factory  # noqa: E402
 from serviceiq.storage.models import (Conversation, DocumentRecord, DocumentVersionRecord, Escalation,  # noqa: E402
-                                      Feedback, Message, ServiceRequest)
+                                      Feedback, Message, ServiceRequest, Approval)
 from serviceiq.storage import registry  # noqa: E402
 from serviceiq.agent.schema import EQUIPMENT_LABELS, summary  # noqa: E402
 
@@ -36,6 +36,13 @@ def sessions():
 def field_service():
     from serviceiq.agent.fieldservice_client import make_field_service
     return make_field_service(get_settings())
+
+
+@st.cache_resource
+def approver_agent():
+    """The agent, for approver decisions: booking and moving the conversation on need no language model."""
+    from serviceiq.agent import Agent
+    return Agent(get_settings(), client=object(), fsp=field_service())
 
 
 @st.cache_resource
@@ -89,8 +96,8 @@ with st.sidebar:
 
 if st.session_state.get("notice"):  # result of the last action, whichever tab it came from
     st.success(st.session_state.pop("notice"))
-tabs = ["Ticket inbox", "Service requests", "Schedule"] + (["Knowledge", "Analytics"] if user["role"] == "admin"
-                                                           else [])
+tabs = ["Ticket inbox", "Service requests", "Schedule"] + (["Approvals", "Knowledge", "Analytics"]
+                                                           if user["role"] == "admin" else [])
 
 
 def fsp_call(method: str, path: str, **kwargs) -> tuple[int, dict]:
@@ -199,7 +206,7 @@ with views["Ticket inbox"], sessions()() as session:
 with views["Service requests"], sessions()() as session:
     st.caption("Requests the assistant collected. Contact details come live from the field-service platform; "
                "a person books the appointment.")
-    request_filter = st.radio("Show", ["new", "contacted", "scheduled", "closed", "all"], horizontal=True,
+    request_filter = st.radio("Show", ["new", "needs_approval", "contacted", "scheduled", "closed", "all"], horizontal=True,
                               key="request-filter")
     query = select(ServiceRequest).where(ServiceRequest.tenant_id == tenant_id).order_by(ServiceRequest.created_at.desc())
     if request_filter != "all":
@@ -236,7 +243,7 @@ with views["Service requests"], sessions()() as session:
                     st.write(f"{c['name']} · {c['phone']}" + (f" · {c['email']}" if c.get("email") else ""))
                     st.caption(", ".join(x for x in (c.get("address"), c.get("city"), c.get("zip")) if x))
                 with st.form(f"request-{r.request_id}"):
-                    statuses = ["new", "contacted", "scheduled", "closed"]
+                    statuses = ["new", "needs_approval", "contacted", "scheduled", "closed"]
                     new_status = st.selectbox("Status", statuses, index=statuses.index(r.status))
                     notes = st.text_area("Staff notes", value=r.staff_notes or "")
                     if st.form_submit_button("Save"):
@@ -328,6 +335,87 @@ with views["Schedule"]:
 
 if user["role"] != "admin":
     st.stop()
+
+# ---------------------------------------------------------------- approvals (M17: BP-7 approval gate)
+with views["Approvals"], sessions()() as session:
+    pending = list(session.scalars(select(Approval).where(Approval.tenant_id == tenant_id, Approval.status == "pending")
+                                   .order_by(Approval.created_at)))
+    st.caption("Requests outside the auto-approval policy (discounts or guaranteed prices, after-hours visits, "
+               "warranty decisions). The agent books nothing until you decide.")
+    if not pending:
+        st.info("Nothing waiting for approval.")
+    for a in pending:
+        request = session.get(ServiceRequest, a.request_id)
+        waited = (datetime.now(timezone.utc) - a.created_at.replace(tzinfo=a.created_at.tzinfo or timezone.utc))
+        service = (a.proposal or {}).get("service") or {}
+        with st.expander(f"⏳ {a.reason.replace('_', ' ')} · request {a.request_id[:8].upper()} · waiting "
+                         f"{waited.total_seconds() / 3600:.1f} h", expanded=True):
+            left, right = st.columns([3, 2])
+            with left:
+                st.markdown(summary(request.payload).replace("$", chr(92) + "$"))
+                code, record = fsp_call("GET", f"/api/customers/{request.customer_ref}")
+                if code == 200:
+                    c = record["customer"]
+                    st.caption(f"{c['name']} · {c['phone']} · " + ", ".join(x for x in (c.get("address"), c.get("zip"))
+                                                                               if x))
+                st.caption(((a.proposal or {}).get("price_line") or f"Service: {service.get('name', '-')}")
+                           .replace("$", chr(92) + "$"))
+            with right:
+                code, body = fsp_call("GET", "/api/availability", params={
+                    "date_from": date.today().isoformat(), "date_to": (date.today() + timedelta(days=13)).isoformat(),
+                    "service_type_id": service.get("id"), "zip": request.payload.get("zip") or "", "limit": 12})
+                slots = body.get("slots", []) if code == 200 else []
+                custom = st.checkbox("Book a custom time (e.g. after hours)", key=f"custom-{a.approval_id}")
+                outside, slot = False, None
+                if custom:
+                    _, org = fsp_call("GET", "/api/org")
+                    _, team = fsp_call("GET", "/api/technicians")
+                    tech = st.selectbox("Technician", team.get("technicians", []), format_func=lambda t: t["name"],
+                                        key=f"custom-tech-{a.approval_id}")
+                    day_value = st.date_input("Date", key=f"custom-day-{a.approval_id}")
+                    time_value = st.time_input("Start", key=f"custom-time-{a.approval_id}", step=timedelta(minutes=30))
+                    outside = st.checkbox("Outside working hours (dispatcher override)", key=f"custom-out-{a.approval_id}")
+                    if tech and org.get("timezone"):
+                        from zoneinfo import ZoneInfo
+                        local = datetime.combine(day_value, time_value, ZoneInfo(org["timezone"]))
+                        slot = {"start": local.astimezone(timezone.utc).isoformat(), "local_start": local.isoformat(),
+                                "technician_id": tech["id"], "technician_name": tech["name"]}
+                elif slots:
+                    slot = st.radio("Free slot", slots, key=f"slot-{a.approval_id}",
+                                    format_func=lambda x: f"{local_time(x['local_start'])} · {x['technician_name']}")
+                else:
+                    st.warning(body.get("detail") or "No free slots in the next two weeks; use a custom time.")
+                from serviceiq.agent import operations
+                published = operations.published_price(session, get_settings(), tenant_id, service.get("code", ""))
+                price = None
+                if published and published["high"] > published["low"]:
+                    price = st.number_input(f"Price (published range ${published['low']:g}-${published['high']:g})",
+                                            min_value=published["low"], max_value=published["high"],
+                                            value=published["low"], key=f"price-{a.approval_id}")
+                note = st.text_input("Note (shown in the request; required to decline)", key=f"note-{a.approval_id}")
+                approve_col, reject_col = st.columns(2)
+                if approve_col.button("Approve and book", key=f"approve-{a.approval_id}", type="primary",
+                                      disabled=slot is None):
+                    try:
+                        result = approver_agent().decide(
+                            session, a.approval_id, user["username"], True, slot=slot, price=price,
+                            price_range=(published["low"], published["high"]) if published else None,
+                            outside_hours=outside)
+                        session.commit()
+                        booking = result["booking"]
+                        st.session_state["notice"] = (
+                            f"Approved: {booking['identifier']} booked for {local_time(booking['local_start'])}. "
+                            + (f"Confirmation emailed to {result['emailed']}." if result.get("emailed")
+                               else "A ticket asks the office to call the customer."))
+                        st.rerun()
+                    except Exception as exc:
+                        session.rollback()
+                        st.error(f"Not booked: {exc}")
+                if reject_col.button("Decline", key=f"reject-{a.approval_id}", disabled=not note):
+                    approver_agent().decide(session, a.approval_id, user["username"], False, note=note)
+                    session.commit()
+                    st.session_state["notice"] = "Declined; a ticket asks the office to call the customer."
+                    st.rerun()
 
 # ---------------------------------------------------------------- knowledge (BP-2)
 with views["Knowledge"], sessions()() as session:

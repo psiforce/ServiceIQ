@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     # Phase 2-3 agent (M14+): intake and operations through one LangGraph agent
     agent_enabled: bool = True        # false = MVP behaviour (questions only)
     intake_max_no_progress: int = 2   # turns without new details before handing off to a person
+    agent_booking_enabled: bool = True  # Phase 3: offer times and book; false = Phase 2 (the office books)
+    agent_tool_allowlist: str = ""    # JSON {"tenant": ["tool", ...]}; tenants not listed may use every tool
+    agent_bookings_per_minute: int = 30  # per tenant
+    booking_days_ahead: int = 14      # how far ahead to look for free times
     # Field-service platform: its URL (empty = run it in-process on fsp_database_url, for local dev and tests)
     fsp_url: str = ""
     fsp_api_keys: str = ""            # JSON {"tenant": "key"}; else var/dev_fsp_keys.json

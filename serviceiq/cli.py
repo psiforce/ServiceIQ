@@ -554,7 +554,7 @@ def purge(days: int = typer.Option(None, help="Retention in days (default: RETEN
 
 @app.command("evaluate-intake")
 def evaluate_intake():
-    """M14: run the scripted intake dialogues through the agent; writes reports/intake_<date>.md and .csv."""
+    """M14/M17: run the scripted intake and booking dialogues through the agent; writes reports/intake_<date>.md."""
     from serviceiq.evaluation.intake_eval import run_intake_eval, write_report
 
     settings = get_settings()
@@ -568,6 +568,7 @@ def evaluate_intake():
                        f"guard + extraction `{settings.guard_model}` · answers `{settings.answer_model}`")
     console.print(f"\nOutcome accuracy {metrics['outcome_accuracy']:.1%} · completion {metrics['completion_rate']:.1%} · "
                   f"fields {metrics['field_accuracy']:.1%} · emergencies {metrics['emergency_exit_rate']:.0%} · "
+                  f"approvals {metrics['approval_routing']:.0%} · policy violations {metrics['policy_violations']} · "
                   f"contact leaks {metrics['pii_leaks']} · cost ${metrics['total_cost']:.3f}")
     console.print(f"Report: {out.relative_to(PROJECT_ROOT)}")
 
