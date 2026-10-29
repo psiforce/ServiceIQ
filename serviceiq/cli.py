@@ -584,11 +584,14 @@ def sweep_command(now: str = typer.Option(None, help="Pretend it is this UTC tim
     settings = get_settings()
     when = datetime.fromisoformat(now).replace(tzinfo=timezone.utc) if now else None
     agent = Agent(settings, client=object())  # no language model: these steps are deterministic
-    with session_factory(make_engine(settings.database_url))() as session:
-        approvals = sweep.sweep_approvals(session, settings, agent.fsp, when)
-        completions = sweep.sweep_completions(session, agent)
-        payments = sweep.sweep_payments(session, settings, agent, when)
-        reviews = sweep.sweep_reviews(session, settings, agent, when)
+    try:
+        with session_factory(make_engine(settings.database_url))() as session:
+            approvals = sweep.sweep_approvals(session, settings, agent.fsp, when)
+            completions = sweep.sweep_completions(session, agent)
+            payments = sweep.sweep_payments(session, settings, agent, when)
+            reviews = sweep.sweep_reviews(session, settings, agent, when)
+    finally:
+        agent.close()  # the Postgres pool must close before the interpreter exits
     for name, rows in (("completion", completions), ("payment", payments), ("review", reviews)):
         for r in rows:
             console.print(f"{name}: {r}")

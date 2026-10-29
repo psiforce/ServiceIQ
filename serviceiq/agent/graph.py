@@ -184,6 +184,12 @@ class Agent(PostService):
     def stage(self, conversation_id: str) -> str:
         return self.graph.get_state({"configurable": {"thread_id": conversation_id}}).values.get("stage", "idle")
 
+    def close(self) -> None:
+        """Close the checkpointer's connection pool (short-lived processes such as the hourly sweep)."""
+        conn = getattr(self.checkpointer, "conn", None)
+        if conn is not None and hasattr(conn, "close"):
+            conn.close()
+
     def forget(self, conversation_id: str) -> None:
         """Delete a conversation's saved state (retention purge)."""
         self.checkpointer.delete_thread(conversation_id)
