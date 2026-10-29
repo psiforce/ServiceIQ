@@ -162,3 +162,15 @@ Project `serviceiq-512906`, region `us-central1`, image `serviceiq:883c284`: `se
 jobs `serviceiq-fsp-seed` and `serviceiq-sweep`, Cloud Scheduler `serviceiq-sweep-hourly` (`0 * * * *` UTC);
 `serviceiq-api`, `serviceiq-admin` and `serviceiq-chat` updated from `fd0d4e3`. Live check: a request booked
 through the deployed API (test job cancelled afterwards).
+
+## Deployed: Phase 4 code, payments off (October 29, 2026)
+
+Image `serviceiq:0074bf1` (branch `phase4-payment-review`, PR #1) on `serviceiq-api`, `serviceiq-admin`,
+`serviceiq-chat`, `serviceiq-fsp` and the jobs `serviceiq-sweep` and `serviceiq-fsp-seed`.
+`AGENT_PAYMENTS_ENABLED=false` on the API, admin and sweep: a completed job opens a ticket for the office to bill
+by hand; no invoice or payment link is sent. `PUBLIC_BASE_URL` points at the chat service. Not done yet (section 6):
+Stripe secrets, the `fsp-webhook-secret` / `SERVICEIQ_WEBHOOK_URL` pair, and public access to `serviceiq-api`
+(it stays private; unauthenticated calls get 403). The `invoices` and `reviews` tables were created at start-up.
+Checks: API and platform `/health` ok; chat page 200; a priced question through the deployed API answered with a
+citation; `serviceiq-sweep` run succeeded ("0 approval(s) escalated · 0 completed job(s) billed …").
+Rollback: previous image `serviceiq:4c93d70`.
