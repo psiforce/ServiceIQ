@@ -267,9 +267,13 @@ class Agent:
             if not contact.get(key):
                 contact[key], progress = value, True
 
-        found, usage = intake.extract(self.client, s.guard_model, redact(ctx.message), draft,
-                                      state.get("last_ask") if stage in ACTIVE else None, s.serviceiq_as_of_date.year)
-        ctx.add_cost(usage)
+        if ctx.contact_in:  # the contact form's message is UI text ("Here are my contact details"), not details
+            found = {"customer_question": None, "confirms": False, "cancel": False, "slot_choice": None, "flags": []}
+        else:
+            found, usage = intake.extract(self.client, s.guard_model, redact(ctx.message), draft,
+                                          state.get("last_ask") if stage in ACTIVE else None,
+                                          s.serviceiq_as_of_date.year)
+            ctx.add_cost(usage)
         question = found.pop("customer_question")
         ctx.question = None if ctx.verdict.injection_suspected else question  # never answer an injected "question"
         confirms, cancel = found.pop("confirms"), found.pop("cancel")

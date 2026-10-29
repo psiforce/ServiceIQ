@@ -22,10 +22,21 @@ gcloud sql databases create fieldservice --instance=INSTANCE --project=PROJECT
 python deploy/gcp_secrets.py --project PROJECT        # adds fsp-database-url and fsp-api-keys
 gcloud sql users create fsp_app --instance=INSTANCE --project=PROJECT \
   --password="$(cat var/gcp/fsp_db_password)"
-# Postgres 15+: let fsp_app create its tables in the public schema
-gcloud sql connect INSTANCE --user=postgres --database=fieldservice --project=PROJECT
-#   fieldservice=> GRANT ALL ON SCHEMA public TO fsp_app;
+# the services' account must be able to read the two new secrets
+for s in fsp-database-url fsp-api-keys; do
+  gcloud secrets add-iam-policy-binding $s --project=PROJECT \
+    --member=serviceAccount:RUN_SERVICE_ACCOUNT --role=roles/secretmanager.secretAccessor
+done
 ```
+
+On Cloud SQL, users created with `gcloud sql users create` can create tables in a new database and do not
+bypass row-level security, so no extra grants were needed (checked on Postgres 17: the platform logs no
+warning at start-up). On a self-managed Postgres 15+, run `GRANT ALL ON SCHEMA public TO fsp_app;` in
+`fieldservice` first.
+
+In every `gcloud run deploy` and `gcloud run jobs create` below, add
+`--service-account=RUN_SERVICE_ACCOUNT` (the account the other ServiceIQ services use; `serviceiq-run@…` in
+M13b).
 
 ## 2. Field-service platform (private service) and onboarding job
 
@@ -68,6 +79,7 @@ Booking is on by default (`AGENT_BOOKING_ENABLED=true`). Set it to `false` on th
 ## 4. Approval timeouts: hourly job
 
 ```bash
+gcloud services enable cloudscheduler.googleapis.com --project=PROJECT   # off by default
 gcloud run jobs create serviceiq-sweep --image=IMAGE --args=sweep --region=REGION --project=PROJECT \
   --set-cloudsql-instances=PROJECT:REGION:INSTANCE \
   --set-env-vars=FSP_URL=$FSP_URL,FSP_ID_TOKEN=true \
@@ -90,3 +102,19 @@ gcloud run jobs execute serviceiq-sweep --region=REGION --project=PROJECT --wait
 
 Then, in the deployed chat, request a visit with "can I get a discount?": it should wait in the admin console's
 Approvals tab. A visit without one should be offered three times and book into the Schedule tab.
+
+The admin console is private (no invoker binding, as in M13b). Open it with
+`gcloud run services proxy serviceiq-admin --region=REGION --project=PROJECT` and browse to the local port.
+
+## Rollback
+
+Redeploy the previous image tag to `serviceiq-api`, `serviceiq-admin` and `serviceiq-chat`
+(`gcloud run services update <service> --image=…:<previous tag>`), or set `AGENT_BOOKING_ENABLED=false` on the
+API to keep intake but stop the agent from booking. The field-service platform and jobs can stay in place.
+
+## Deployed (October 29, 2026)
+
+Project `serviceiq-512906`, region `us-central1`, image `serviceiq:883c284`: `serviceiq-fsp` (private),
+jobs `serviceiq-fsp-seed` and `serviceiq-sweep`, Cloud Scheduler `serviceiq-sweep-hourly` (`0 * * * *` UTC);
+`serviceiq-api`, `serviceiq-admin` and `serviceiq-chat` updated from `fd0d4e3`. Live check: a request booked
+through the deployed API (test job cancelled afterwards).

@@ -421,3 +421,18 @@ def test_overdue_approvals_are_escalated_once_and_stay_open(env):
     assert any("URGENT-" in n for n in names) and any("CUSTOMER-" in n for n in names)
     customer_mail = next(p for p in env.outbox.glob("*CUSTOMER-*.eml")).read_text(encoding="utf-8")
     assert "jordan@example.com" in customer_mail and "will call you" in customer_mail
+
+
+def test_the_contact_form_message_is_not_read_as_request_details(env, monkeypatch):
+    calls = []
+
+    def recording(client, model, system, user, schema, name):
+        calls.append(user)
+        reply, usage = fake_extract(client, model, system, user, schema, name)
+        return reply | {"notes": "Contact details"}, usage
+    for message in ("My AC is running but not cooling, can someone come out?", "45801",
+                    "Tomorrow please, weekday mornings"):
+        say(env, message)
+    monkeypatch.setattr(intake_module, "chat_json", recording)
+    t = say(env, "Here are my contact details.", contact=CONTACT)
+    assert t.status == "confirming" and calls == [] and "Notes" not in t.answer
