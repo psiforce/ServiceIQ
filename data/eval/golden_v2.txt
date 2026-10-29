@@ -1,0 +1,56 @@
+# Golden dataset v2 (50 cases): the cases run for the baseline and improved evaluations.
+# v1 cases that every run passed were swapped for harder ones (N*, E*). Mix 25 / 15 / 7 / 3.
+# happy
+P01
+P02
+P03
+P04
+P05
+P06
+P07
+P08
+I01
+I02
+I03
+H01
+H03
+I23
+H06
+I06
+I10
+H05
+N01
+N02
+N03
+N04
+N05
+N06
+N07
+# edge
+I05
+I12
+I13
+I18
+A01
+A02
+A03
+P09
+P10
+P12
+E01
+E02
+E03
+E04
+E05
+# known_failure
+I11
+I14
+I19
+I21
+R01
+P13
+P14
+# adversarial
+I20
+I22
+P15

@@ -29,6 +29,7 @@ STATUS_BANNER = {
     "proposing": ("info", "🗓️", "Pick a time for your visit."),
     "booked": ("success", "✅", "Your visit is booked."),
     "awaiting_approval": ("info", "⏳", "The office will review your request before booking."),
+    "payment": ("info", "💳", "Paying your invoice."),
 }
 SUGGESTIONS = ["How much is a diagnostic visit?", "Is my compressor under warranty?",
                "Do you repair Carrier AC units?", "My AC isn't cooling. Can someone come out?"]
@@ -149,9 +150,13 @@ def render_assistant(turn: dict, index: int, tenant: str, show_debug: bool, late
 settings = get_settings()
 tenants = tenant_ids(settings.data_dir)
 profiles = {t: load_profile(settings.data_dir, t) for t in tenants}
+link = st.query_params  # Phase 4 email links: ?tenant=..&conversation=..&review=1, or ?tenant=..&paid=<invoice>
 with st.sidebar:
     st.header("ServiceIQ")
-    tenant = st.selectbox("Company (tenant)", tenants, format_func=lambda t: profiles[t].company_name)
+    tenant = st.selectbox("Company (tenant)", tenants, format_func=lambda t: profiles[t].company_name,
+                          index=tenants.index(link["tenant"]) if link.get("tenant") in tenants else 0)
+    if link.get("conversation") and f"conversation-{tenant}" not in st.session_state:
+        st.session_state[f"conversation-{tenant}"] = link["conversation"]  # back in the same conversation
     show_debug = st.toggle("Show debug details", value=False)
     if st.button("New conversation", width="stretch"):
         st.session_state.pop(f"history-{tenant}", None)
@@ -188,6 +193,26 @@ st.sidebar.caption(f"Session cost: ${spent:.4f} · {len(history)} question(s)")
 st.title(profile.company_name)
 st.caption("Ask about our services, pricing, warranties and maintenance. "
            f"For emergencies, call {profile.emergency_phone or '911'}.")
+
+if link.get("paid"):  # back from the secure payment page
+    st.success("Thank you! Your payment is being confirmed; a receipt is on its way by email.", icon="✅")
+if link.get("review") and api_client is not None and conversation_id:
+    done = st.session_state.get(f"review-done-{conversation_id}")
+    if done:
+        st.success(md(done["message"]), icon="⭐")
+    else:
+        with st.form("review-form"):
+            st.markdown("**How was your visit?**")
+            rating = st.feedback("stars", key="review-stars")
+            comment = st.text_area("Anything you'd like to tell us? (optional)", max_chars=1000)
+            if st.form_submit_button("Send") and rating is not None:
+                try:
+                    st.session_state[f"review-done-{conversation_id}"] = api_client.review(conversation_id, rating + 1,
+                                                                                           comment)
+                except Exception:
+                    st.session_state[f"review-done-{conversation_id}"] = {
+                        "message": f"Thanks! We couldn't save your rating just now; please call {profile.office_phone}."}
+                st.rerun()
 
 for i, turn in enumerate(history):
     with st.chat_message("user"):

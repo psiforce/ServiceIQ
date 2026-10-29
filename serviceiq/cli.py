@@ -1,5 +1,6 @@
 """ServiceIQ command line. Run `python -m serviceiq --help` to list commands."""
 import sys
+from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -571,10 +572,43 @@ def sweep_approvals_command(now: str = typer.Option(None, help="Pretend it is th
     console.print(f"{len(results)} approval(s) escalated.")
 
 
+@app.command("sweep")
+def sweep_command(now: str = typer.Option(None, help="Pretend it is this UTC time (ISO), for testing.")):
+    """Hourly pass: approval timeouts, then Phase 4 completions (missed events), payment and review reminders."""
+    from datetime import datetime, timezone
+
+    from serviceiq.agent import Agent
+    from serviceiq.agent import sweep
+    from serviceiq.storage.db import make_engine, session_factory
+
+    settings = get_settings()
+    when = datetime.fromisoformat(now).replace(tzinfo=timezone.utc) if now else None
+    agent = Agent(settings, client=object())  # no language model: these steps are deterministic
+    with session_factory(make_engine(settings.database_url))() as session:
+        approvals = sweep.sweep_approvals(session, settings, agent.fsp, when)
+        completions = sweep.sweep_completions(session, agent)
+        payments = sweep.sweep_payments(session, settings, agent, when)
+        reviews = sweep.sweep_reviews(session, settings, agent, when)
+    for name, rows in (("completion", completions), ("payment", payments), ("review", reviews)):
+        for r in rows:
+            console.print(f"{name}: {r}")
+    console.print(f"{len(approvals)} approval(s) escalated · {len(completions)} completed job(s) billed · "
+                  f"{len(payments)} invoice reminder(s)/ticket(s) · {len(reviews)} review reminder(s)/closure(s).")
+
+
 @app.command("evaluate-intake")
-def evaluate_intake():
-    """M14/M17: run the scripted intake and booking dialogues through the agent; writes reports/intake_<date>.md."""
-    from serviceiq.evaluation.intake_eval import run_intake_eval, write_report
+def evaluate_intake(
+    case: list[str] = typer.Option(None, "--case", help="Run only these case IDs (repeatable), e.g. --case I01."),
+    cases_file: Path = typer.Option(None, help="Run the case IDs listed in this file, e.g. data/eval/golden_v2.txt."),
+    dataset: str = typer.Option("serviceiq-agent-golden", help="LangSmith dataset to log the experiment on."),
+    label: str = typer.Option("", help="Agent version label for the experiment name, e.g. baseline or improved."),
+    langsmith: bool = typer.Option(True, help="Upload results as a LangSmith experiment (needs LANGSMITH_API_KEY)."),
+):
+    """M14/M17/Phase 4: the agent golden dataset (dialogues, race test, post-service scenarios) through the real
+    agent; writes reports/intake_<date>.md (+ .csv, postservice_<date>.csv)."""
+    import subprocess
+
+    from serviceiq.evaluation.intake_eval import load_case_list, run_intake_eval, upload_to_langsmith, write_report
 
     settings = get_settings()
 
@@ -582,17 +616,76 @@ def evaluate_intake():
         mark = "[green]pass[/green]" if r.passed else "[red]FAIL[/red]"
         console.print(f"{r.case_id:4} {r.tenant:13} expected {r.expected:16} got {r.outcome:16} {mark}")
 
-    results, metrics = run_intake_eval(settings, progress=show)
-    out = write_report(results, metrics, PROJECT_ROOT / "reports",
-                       f"guard + extraction `{settings.guard_model}` · answers `{settings.answer_model}`")
-    console.print(f"\nOutcome accuracy {metrics['outcome_accuracy']:.1%} · completion {metrics['completion_rate']:.1%} · "
-                  f"fields {metrics['field_accuracy']:.1%} · emergencies {metrics['emergency_exit_rate']:.0%} · "
-                  f"approvals {metrics['approval_routing']:.0%} · policy violations {metrics['policy_violations']} · "
+    def show_post(r):
+        mark = "[green]pass[/green]" if r.passed else "[red]FAIL[/red]"
+        console.print(f"{r.case_id:4} {r.tenant:13} expected {r.expected_stage:16} got {r.stage:16} {mark}"
+                      + ("" if r.passed else f"  {'; '.join(r.problems + r.missing_phrases)}"))
+
+    cases = (set(case) if case else set()) | (load_case_list(cases_file) if cases_file else set())
+    results, metrics, post = run_intake_eval(settings, progress=show, cases=cases or None, post_progress=show_post)
+    models = f"guard + extraction `{settings.guard_model}` · answers `{settings.answer_model}`"
+    out = write_report(results, metrics, PROJECT_ROOT / "reports", models, post)
+
+    def pct(key):
+        return f"{metrics[key]:.0%}" if metrics.get(key) is not None else "-"
+    console.print(f"\nOutcome accuracy {pct('outcome_accuracy')} · completion {pct('completion_rate')} · "
+                  f"fields {pct('field_accuracy')} · emergencies {pct('emergency_exit_rate')} · "
+                  f"approvals {pct('approval_routing')} · policy violations {metrics['policy_violations']} · "
                   f"double bookings {metrics['double_bookings']} · unaudited jobs {metrics['unaudited_jobs']} · "
-                  f"race {'ok' if metrics['race_handled'] else 'FAILED'} · "
+                  f"race {('ok' if metrics['race_handled'] else 'FAILED') if 'race_handled' in metrics else 'not run'} · "
                   f"agent time to book p95 {metrics['agent_seconds_to_book_p95']} s · "
                   f"contact leaks {metrics['pii_leaks']} · cost ${metrics['total_cost']:.3f}")
+    if post:
+        console.print(f"Post-service: pass {pct('postservice_pass_rate')} · trajectory {pct('trajectory_accuracy')} · "
+                      f"invoices {pct('invoice_accuracy')} · duplicate charges {metrics['duplicate_charges']} · "
+                      f"unaudited money actions {metrics['unaudited_money_actions']} · review gating "
+                      f"{metrics['review_gating_violations']} · cost ${metrics['postservice_cost']:.3f}")
     console.print(f"Report: {out.relative_to(PROJECT_ROOT)}")
+    if langsmith and settings.langsmith_api_key:
+        try:
+            sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True,
+                                 cwd=PROJECT_ROOT).stdout.strip() or "local"
+            version = "-".join(x for x in (label, sha, settings.guard_model, settings.answer_model) if x)
+            name = upload_to_langsmith(results, post, metrics, settings.data_dir,
+                                       settings.langsmith_api_key.get_secret_value(), version, dataset, cases or None)
+            console.print(f"LangSmith experiment: {name}")
+        except Exception as exc:
+            console.print(f"[yellow]LangSmith upload failed: {type(exc).__name__}: {exc}[/]")
+
+
+@app.command("eval-report")
+def eval_report_command(
+    baseline: Path = typer.Option(..., help="Baseline run, reports/intake_<stamp>.json."),
+    improved: Path = typer.Option(..., help="Improved run on the same cases, reports/intake_<stamp>.json."),
+    analysis: Path = typer.Option(PROJECT_ROOT / "reports" / "agent_eval_v2_analysis.json",
+                                  help="The evaluator's write-up: failure modes, changes, next steps, links."),
+    labels: Path = typer.Option(None, help="The spreadsheet with the Human labels tab filled in."),
+):
+    """Agent evaluation report: judges both runs' replies, writes reports/agent_eval_v2.xlsx and the Word report."""
+    import json
+
+    from serviceiq.evaluation import eval_report as er
+
+    settings = get_settings()
+    runs = [json.loads(p.read_text(encoding="utf-8")) for p in (baseline, improved)]
+    rows = [er.case_rows(run) for run in runs]
+    if set(rows[0]) != set(rows[1]):
+        raise typer.BadParameter(f"the runs cover different cases: {sorted(set(rows[0]) ^ set(rows[1]))}")
+    cases = er.golden_cases(settings.data_dir, set(rows[0]))
+    with console.status("Judging replies..."):
+        judges = tuple(er.run_judge(p, settings.data_dir, settings, cases) for p in (baseline, improved))
+    metrics = [er.summary_metrics(run, judge) for run, judge in zip(runs, judges)]
+    notes = json.loads(analysis.read_text(encoding="utf-8"))
+    agree = er.agreement(labels, judges[1]) if labels else None
+    xlsx = PROJECT_ROOT / "reports" / "agent_eval_v2.xlsx"
+    er.write_workbook(xlsx, cases, rows[0], rows[1], metrics[0], metrics[1], judges, notes)
+    docx = PROJECT_ROOT / "docs" / "ServiceIQ — Agent Evaluation Report (v2).docx"
+    er.write_docx(docx, notes, cases, rows[0], rows[1], metrics[0], metrics[1], judges, agree)
+    console.print(f"Cases passed {metrics[0]['passed']}/{metrics[0]['cases']} → {metrics[1]['passed']}/"
+                  f"{metrics[1]['cases']} · judge pass {metrics[0]['judge_pass_rate']:.0%} → "
+                  f"{metrics[1]['judge_pass_rate']:.0%}" + (f" · judge-human agreement {agree['pass_agreement']:.0%}"
+                                                             if agree else ""))
+    console.print(f"Spreadsheet: {xlsx.relative_to(PROJECT_ROOT)}\nReport: {docx.relative_to(PROJECT_ROOT)}")
 
 
 @app.command("eval-guard")

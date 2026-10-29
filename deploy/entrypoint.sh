@@ -14,12 +14,12 @@ case "$role" in
   fsp-seed)
     exec python -m fieldservice seed "$@"
     ;;
-  sweep)  # one pass: Cloud Run job, triggered hourly by Cloud Scheduler
-    exec python -m serviceiq sweep-approvals "$@"
+  sweep)  # one pass (approvals, completions, payments, reviews): Cloud Run job, hourly via Cloud Scheduler
+    exec python -m serviceiq sweep "$@"
     ;;
   sweep-loop)  # local compose: a pass every SWEEP_INTERVAL_SECONDS (default one hour)
     while true; do
-      python -m serviceiq sweep-approvals || echo "sweep failed; retrying next interval"
+      python -m serviceiq sweep || echo "sweep failed; retrying next interval"
       sleep "${SWEEP_INTERVAL_SECONDS:-3600}"
     done
     ;;

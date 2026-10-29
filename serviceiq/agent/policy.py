@@ -23,11 +23,15 @@ DEFAULT_POLICIES = {
     "after_hours": (False, "you asked for a visit outside regular business hours"),
     "warranty": (False, "warranty coverage has to be confirmed by the office"),
     "reschedule_within_policy": (True, "a reschedule or cancellation within policy"),
+    # Phase 4: the technician's final price
+    "invoice_within_range": (True, "a final price within the published range"),
+    "invoice_out_of_range": (False, "the final price is outside the published range"),
 }
 # request flags (set during intake) -> the policy condition they trigger
 FLAG_CONDITIONS = {"discount_or_quote": "binding_quote", "after_hours": "after_hours", "warranty_claim": "warranty"}
 AGENT_TOOLS = ["search_knowledge", "check_eligibility", "upsert_customer", "add_equipment", "create_service_request",
-               "check_availability", "book_job", "notify_customer"]
+               "check_availability", "book_job", "notify_customer",
+               "create_invoice", "send_payment_link", "record_payment", "request_review", "record_review"]
 
 
 class PolicyViolation(RuntimeError):
@@ -43,19 +47,41 @@ class Decision:
 
 
 def ensure_policies(session: Session, tenant_id: str) -> list[ApprovalPolicy]:
-    rows = list(session.scalars(select(ApprovalPolicy).where(ApprovalPolicy.tenant_id == tenant_id,
-                                                              ApprovalPolicy.active.is_(True))))
-    if not rows:
-        rows = [ApprovalPolicy(tenant_id=tenant_id, condition=c, auto_approve=auto, approver_role="admin",
-                               timeout_hours=24) for c, (auto, _) in DEFAULT_POLICIES.items()]
-        session.add_all(rows)
+    """The tenant's active rules, seeding defaults for any condition the tenant has never had (so conditions added
+    later, such as the Phase 4 invoice rules, reach existing tenants; a rule a tenant switched off stays off)."""
+    known = {p.condition for p in session.scalars(select(ApprovalPolicy).where(ApprovalPolicy.tenant_id == tenant_id))}
+    added = [ApprovalPolicy(tenant_id=tenant_id, condition=c, auto_approve=auto, approver_role="admin",
+                            timeout_hours=24) for c, (auto, _) in DEFAULT_POLICIES.items() if c not in known]
+    if added:
+        session.add_all(added)
         session.flush()
-    return rows
+    return list(session.scalars(select(ApprovalPolicy).where(ApprovalPolicy.tenant_id == tenant_id,
+                                                              ApprovalPolicy.active.is_(True))))
 
 
 def evaluate(session: Session, tenant_id: str, flags: list[str]) -> Decision:
-    policies = {p.condition: p for p in ensure_policies(session, tenant_id)}
     conditions = sorted({FLAG_CONDITIONS[f] for f in flags if f in FLAG_CONDITIONS}) or ["standard_visit"]
+    return _decide(session, tenant_id, conditions)
+
+
+def price_range(published: dict | None, trip_fee: float | int | None) -> tuple[float, float] | None:
+    """The range a final price may fall in without an approver: the published service price, up to its top plus
+    any trip fee (the fee may or may not have been added to the job's price)."""
+    if published is None:
+        return None
+    return published["low"], published["high"] + float(trip_fee or 0)
+
+
+def evaluate_invoice(session: Session, tenant_id: str, amount: float,
+                     allowed_range: tuple[float, float] | None) -> Decision:
+    """Phase 4: a final price inside the published range is billed at once; anything else (or a service with no
+    published price) waits for an approver."""
+    inside = allowed_range is not None and allowed_range[0] <= amount <= allowed_range[1]
+    return _decide(session, tenant_id, ["invoice_within_range" if inside else "invoice_out_of_range"])
+
+
+def _decide(session: Session, tenant_id: str, conditions: list[str]) -> Decision:
+    policies = {p.condition: p for p in ensure_policies(session, tenant_id)}
     decision = Decision(auto=True, conditions=conditions)
     for condition in conditions:
         policy = policies.get(condition)
@@ -93,3 +119,15 @@ def check_booking(session: Session, settings: Settings, tenant_id: str, flags: l
         ToolCall.created_at >= datetime.now(timezone.utc) - timedelta(minutes=1)))
     if recent >= settings.agent_bookings_per_minute:
         raise PolicyViolation("too many bookings in the last minute; try again shortly")
+
+
+def check_invoice(settings: Settings, tenant_id: str, amount: float, allowed_range: tuple[float, float] | None,
+                  approver: str | None) -> None:
+    """Hard limits, checked right before a payment link is sent (Phase 4). Raises PolicyViolation."""
+    if not settings.agent_payments_enabled or not allowed(settings, tenant_id, "send_payment_link"):
+        raise PolicyViolation("payments are not enabled for this company")
+    if amount <= 0:
+        raise PolicyViolation("an invoice must be for more than $0")
+    inside = allowed_range is not None and allowed_range[0] <= amount <= allowed_range[1]
+    if not inside and not approver:
+        raise PolicyViolation("a price outside the published range needs an approver")

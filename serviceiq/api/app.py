@@ -10,15 +10,22 @@ Endpoints
                         (`contact`) and the customer's confirmation (`confirm`)
   POST /v1/escalations  request a callback (attaches contact details to the handoff ticket)
   POST /v1/feedback     rate an answer
+  POST /v1/reviews      Phase 4: the customer's rating after a paid visit (widget key, like chat)
+  POST /v1/events/fieldservice  Phase 4: job.completed from the field-service platform (HMAC-signed, no widget key)
+  POST /v1/payments/stripe      Phase 4: Stripe payment events (Stripe-signed, no widget key)
   GET  /health          liveness check (no auth)
 Run locally:  python -m serviceiq serve
 """
+import hashlib
+import hmac
+import json
 import logging
 import threading
 import time
 from collections import defaultdict, deque
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -104,6 +111,34 @@ class FeedbackRequest(BaseModel):
     message_id: str
     rating: str = Field(pattern="^(up|down)$")
     comment: str | None = Field(default=None, max_length=1000)
+
+
+class ReviewRequest(BaseModel):
+    conversation_id: str
+    rating: int = Field(ge=1, le=5)
+    comment: str = Field(default="", max_length=1000)
+
+
+class ReviewResponse(BaseModel):
+    status: str
+    message: str
+    public_link: str | None = None
+
+
+EVENT_TOLERANCE_SECONDS = 300  # older signed events are refused (replays)
+
+
+def event_signature(secret: str, timestamp: str, body: bytes) -> str:
+    """HMAC-SHA256 over "<timestamp>.<body>", the same scheme the field-service platform signs with."""
+    return hmac.new(secret.encode(), timestamp.encode() + b"." + body, hashlib.sha256).hexdigest()
+
+
+def tenant_for_org(settings: Settings, org_id: str) -> str | None:
+    """The tenant whose field-service config uses this org (data/tenants/<tenant>/fieldservice.json)."""
+    for path in sorted((settings.data_dir / "tenants").glob("*/fieldservice.json")):
+        if json.loads(path.read_text(encoding="utf-8")).get("org_id") == org_id:
+            return path.parent.name
+    return None
 
 
 # ---------------------------------------------------------------- rate limiting (per widget key, in memory)
@@ -269,6 +304,63 @@ def create_app(settings: Settings | None = None, assistant=None, engine=None, ag
                              comment=redact(body.comment) if body.comment else None))
         session.commit()
         return {"status": "recorded"}
+
+    @app.post("/v1/reviews", response_model=ReviewResponse)
+    def review(body: ReviewRequest, t: Tenant = Depends(tenant), session: Session = Depends(db)):
+        own_conversation(session, t.tenant_id, body.conversation_id)
+        try:
+            result = get_agent().record_review(session, t.tenant_id, body.conversation_id, body.rating, body.comment)
+        except LookupError:
+            raise HTTPException(status_code=404, detail="no review was requested in this conversation") from None
+        session.commit()
+        return ReviewResponse(status=result["status"], message=result["message"], public_link=result["public_link"])
+
+    # ------------------------------------------------------------ Phase 4 webhooks (server to server)
+    def job_completed(payload: dict) -> dict:
+        tenant_id = tenant_for_org(settings, str(payload.get("org_id", "")))
+        if payload.get("event") != "job.completed" or tenant_id is None or not payload.get("job_id"):
+            return {"status": "ignored"}
+        with sessions() as session:
+            result = get_agent().on_job_completed(session, tenant_id, str(payload["job_id"]))
+            session.commit()
+        return {"status": result["status"]}
+
+    @app.post("/v1/events/fieldservice")
+    async def fieldservice_event(request: Request, x_serviceiq_timestamp: str = Header(default=""),
+                                 x_serviceiq_signature: str = Header(default="")):
+        secret = settings.fsp_webhook_secret.get_secret_value() if settings.fsp_webhook_secret else ""
+        if not secret:
+            raise HTTPException(status_code=503, detail="field-service events are not configured")
+        body = await request.body()
+        try:
+            fresh = abs(time.time() - float(x_serviceiq_timestamp)) <= EVENT_TOLERANCE_SECONDS
+        except ValueError:
+            fresh = False
+        expected = event_signature(secret, x_serviceiq_timestamp, body)
+        if not fresh or not hmac.compare_digest(expected, x_serviceiq_signature):
+            raise HTTPException(status_code=401, detail="invalid or expired signature")
+        try:
+            payload = json.loads(body)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="body must be JSON") from None
+        return await run_in_threadpool(job_completed, payload)
+
+    def payment_event(body: bytes, signature: str) -> dict:
+        agent = get_agent()
+        try:
+            event = agent.payments.parse_event(body, signature)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid payment event") from None
+        if event is None:
+            return {"status": "ignored"}
+        with sessions() as session:
+            result = agent.on_payment(session, event)
+            session.commit()
+        return {"status": result["status"]}
+
+    @app.post("/v1/payments/stripe")
+    async def stripe_webhook(request: Request, stripe_signature: str = Header(default="")):
+        return await run_in_threadpool(payment_event, await request.body(), stripe_signature)
 
     @app.exception_handler(Exception)
     def unexpected(request: Request, exc: Exception):  # never leak internals to the widget

@@ -10,6 +10,7 @@ x-serviceiq: &serviceiq
     DATABASE_URL: postgresql+psycopg://serviceiq:serviceiq-local@db:5432/serviceiq
     FSP_URL: http://fsp:8080
     OUTBOX_DIR: /app/var/outbox
+    FSP_WEBHOOK_SECRET: local-event-secret  # Phase 4: verifies the platform's job.completed events
   volumes:
     - ./var/docker:/app/var
 
@@ -62,6 +63,8 @@ services:
     ports: ["8100:8080"]
     environment:
       <<: *fsp-db
+      SERVICEIQ_WEBHOOK_URL: http://api:8080/v1/events/fieldservice  # Phase 4: bill the job when it's completed
+      SERVICEIQ_WEBHOOK_SECRET: local-event-secret
     depends_on:
       fsp-init: {condition: service_completed_successfully}
     healthcheck:
@@ -97,7 +100,7 @@ services:
     depends_on:
       api: {condition: service_healthy}
 
-  sweeper:  # escalates approvals left undecided past their timeout (hourly)
+  sweeper:  # hourly: approval timeouts, missed completions, payment and review reminders
     <<: *serviceiq
     command: ["sweep-loop"]
     depends_on:

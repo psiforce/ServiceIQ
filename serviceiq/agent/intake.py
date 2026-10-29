@@ -40,7 +40,10 @@ Fields:
 - symptoms: what is wrong in a short phrase, or the service wanted when nothing is wrong (for example
   "annual tune-up", "install a smart thermostat", "duct cleaning").
 - urgency: urgent = no heat or cooling right now, or water leaking; soon = within the next few days;
-  routine = maintenance, tune-up or flexible timing.
+  routine = maintenance, tune-up or flexible timing. Heat or cooling that has stopped now ("not cooling at all",
+  "no heat", "stopped working", "won't turn on") is urgent whatever day the customer asks for, and so is a
+  request for today, tonight or tomorrow (also "tmrw", "tmr", "asap"). A system that still runs but is noisy,
+  weak or icing follows the customer's own timing ("within a few days" = soon).
 - preferred_windows: short phrases such as "weekday mornings" or "Tuesday afternoon".
 - notes: anything else useful for the technician, such as access or pets (never door or gate codes).
 - customer_question: if the customer also asks a genuine question about the company's prices, policies, services

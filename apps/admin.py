@@ -17,7 +17,7 @@ from serviceiq.config import PROJECT_ROOT, get_settings  # noqa: E402
 from serviceiq.storage.auth import authenticate  # noqa: E402
 from serviceiq.storage.db import make_engine, session_factory  # noqa: E402
 from serviceiq.storage.models import (Conversation, DocumentRecord, DocumentVersionRecord, Escalation,  # noqa: E402
-                                      Feedback, Message, ServiceRequest, Approval, ToolCall)
+                                      Feedback, Invoice, Message, Review, ServiceRequest, Approval, ToolCall)
 from serviceiq.storage import registry  # noqa: E402
 from serviceiq.agent.schema import EQUIPMENT_LABELS, summary  # noqa: E402
 
@@ -146,6 +146,51 @@ def book_visit(r: ServiceRequest) -> None:
         st.warning(f"Couldn't book that slot: {job.get('detail')}. Pick another one.")
 
 
+def bill_completed_job(job_id: str) -> str:
+    """Phase 4: invoice a job just marked completed (idempotent: a repeated event bills once)."""
+    try:
+        with sessions()() as s:
+            result = approver_agent().on_job_completed(s, tenant_id, job_id)
+            s.commit()
+    except Exception as exc:
+        return f"Invoice not created ({type(exc).__name__}); the hourly sweep will retry."
+    return {"sent": "Invoice and secure payment link sent to the customer.",
+            "needs_approval": "The final price is outside the published range: approve the invoice in Approvals.",
+            "manual": "Automatic invoicing is off: a ticket asks the office to bill the customer.",
+            "duplicate": "Already invoiced."}.get(result["status"], "Not a ServiceIQ booking: bill as usual.")
+
+
+INVOICE_ICONS = {"pending_approval": "⏳", "sent": "📨", "processing": "🏦", "paid": "✅", "failed": "⚠️", "void": "🚫"}
+
+
+def invoice_panel(session, r: ServiceRequest) -> None:
+    """Phase 4: the request's invoice, an off-line payment form, and the customer's review."""
+    invoice = session.scalar(select(Invoice).where(Invoice.request_id == r.request_id))
+    if invoice is None:
+        return
+    st.markdown(f"**Invoice** {INVOICE_ICONS.get(invoice.status, '')} {invoice.status} · "
+                + f"${invoice.amount_cents / 100:,.2f}".replace("$", chr(92) + "$")
+                + (f" · paid by {invoice.method}" if invoice.status == "paid" else "")
+                + (f" (recorded by {invoice.recorded_by})" if invoice.recorded_by else ""))
+    if invoice.status in ("sent", "failed", "processing"):
+        with st.form(f"mark-paid-{invoice.invoice_id}"):
+            method = st.selectbox("Paid off-line by", ["zelle", "check", "cash"],
+                                  format_func={"zelle": "Zelle", "check": "Check", "cash": "Cash"}.get)
+            if st.form_submit_button("Mark paid"):
+                approver_agent().record_manual_payment(session, invoice.invoice_id, method, user["username"])
+                session.commit()
+                st.session_state["notice"] = "Payment recorded; a receipt and a review request were sent."
+                st.rerun()
+    review = session.scalar(select(Review).where(Review.request_id == r.request_id))
+    if review is not None and review.status == "submitted":
+        stars = "★" * review.rating + "☆" * (5 - review.rating)
+        st.markdown(f"**Review** {stars}" + (f" · “{review.comment}”" if review.comment else ""))
+        if review.recovery_escalation_id:
+            st.caption("Low rating: a recovery ticket is in the inbox.")
+    elif review is not None:
+        st.caption(f"Review {review.status}.")
+
+
 def parse_hours(text: str) -> dict:
     """'mon 07:00-18:00' per line -> {'mon': ['07:00', '18:00']}"""
     hours = {}
@@ -204,10 +249,11 @@ with views["Ticket inbox"], sessions()() as session:
 
 # ---------------------------------------------------------------- service requests (BP-6, Phase 2 intake)
 with views["Service requests"], sessions()() as session:
-    st.caption("Requests the assistant collected. Contact details come live from the field-service platform; "
-               "a person books the appointment.")
-    request_filter = st.radio("Show", ["new", "needs_approval", "contacted", "scheduled", "closed", "all"], horizontal=True,
-                              key="request-filter")
+    st.caption("Requests the assistant collected. Contact details come live from the field-service platform. "
+               "After a visit: invoice, payment and review.")
+    request_statuses = ["new", "needs_approval", "contacted", "scheduled", "completed", "invoiced", "paid", "reviewed",
+                        "closed"]
+    request_filter = st.radio("Show", request_statuses + ["all"], horizontal=True, key="request-filter")
     query = select(ServiceRequest).where(ServiceRequest.tenant_id == tenant_id).order_by(ServiceRequest.created_at.desc())
     if request_filter != "all":
         query = query.where(ServiceRequest.status == request_filter)
@@ -231,6 +277,7 @@ with views["Service requests"], sessions()() as session:
                 elif r.status != "closed":
                     book_visit(r)
                     session.commit()
+                invoice_panel(session, r)
             with right:
                 st.markdown("**Customer**")
                 try:
@@ -243,8 +290,7 @@ with views["Service requests"], sessions()() as session:
                     st.write(f"{c['name']} · {c['phone']}" + (f" · {c['email']}" if c.get("email") else ""))
                     st.caption(", ".join(x for x in (c.get("address"), c.get("city"), c.get("zip")) if x))
                 with st.form(f"request-{r.request_id}"):
-                    statuses = ["new", "needs_approval", "contacted", "scheduled", "closed"]
-                    new_status = st.selectbox("Status", statuses, index=statuses.index(r.status))
+                    new_status = st.selectbox("Status", request_statuses, index=request_statuses.index(r.status))
                     notes = st.text_area("Staff notes", value=r.staff_notes or "")
                     if st.form_submit_button("Save"):
                         r.status, r.staff_notes = new_status, notes or None
@@ -285,14 +331,24 @@ with views["Schedule"]:
                 new_time = c3.time_input("Start", value=start_local.time(), step=timedelta(minutes=30))
                 statuses = ["scheduled", "confirmed", "in_progress", "completed", "cancelled"]
                 new_status = c4.selectbox("Status", statuses, index=statuses.index(job["status"]))
+                p1, p2 = st.columns([1, 3])
+                final_price = p1.number_input("Final price, $ (when completed)", min_value=0.0, step=1.0,
+                                              value=float(job.get("price") or 0))
+                completion = p2.text_input("Completion notes (when completed)", value=job.get("completion_notes") or "")
                 override = st.checkbox("Allow outside working hours (dispatcher override)")
                 if st.form_submit_button("Save job"):
                     start = datetime.combine(new_day, new_time, start_local.tzinfo)
-                    code, body = fsp_call("PUT", f"/api/jobs/{job['id']}", json={
-                        "technician_id": new_tech["id"], "scheduled_start": start.isoformat(),
-                        "status": new_status, "allow_outside_hours": override})
+                    change = {"technician_id": new_tech["id"], "scheduled_start": start.isoformat(),
+                              "status": new_status, "allow_outside_hours": override}
+                    completing = new_status == "completed" and job["status"] != "completed"
+                    if completing:
+                        change |= {"price": final_price, "completion_notes": completion}
+                    code, body = fsp_call("PUT", f"/api/jobs/{job['id']}", json=change)
                     if code == 200:
-                        st.session_state["notice"] = f"{job['identifier']} updated."
+                        notice = f"{job['identifier']} updated."
+                        if completing:  # bill now (the platform's event and the hourly sweep would also do it)
+                            notice += " " + bill_completed_job(job["id"])
+                        st.session_state["notice"] = notice
                         st.rerun()
                     st.error(f"Not saved: {body.get('detail')}")
         else:
@@ -341,12 +397,48 @@ with views["Approvals"], sessions()() as session:
     pending = list(session.scalars(select(Approval).where(Approval.tenant_id == tenant_id, Approval.status == "pending")
                                    .order_by(Approval.created_at)))
     st.caption("Requests outside the auto-approval policy (discounts or guaranteed prices, after-hours visits, "
-               "warranty decisions). The agent books nothing until you decide.")
+               "warranty decisions, final prices outside the published range). The agent books or bills nothing "
+               "until you decide.")
     if not pending:
         st.info("Nothing waiting for approval.")
     for a in pending:
         request = session.get(ServiceRequest, a.request_id)
         waited = (datetime.now(timezone.utc) - a.created_at.replace(tzinfo=a.created_at.tzinfo or timezone.utc))
+        if (a.proposal or {}).get("kind") == "invoice":  # Phase 4: a final price outside the published range
+            p = a.proposal
+            with st.expander(f"🧾 invoice outside the published range · request {a.request_id[:8].upper()} · "
+                             f"waiting {waited.total_seconds() / 3600:.1f} h", expanded=True):
+                left, right = st.columns([3, 2])
+                with left:
+                    allowed = (f"${p['range'][0]:,.2f}-${p['range'][1]:,.2f}" if p.get("range")
+                               else "no published price for this service")
+                    st.markdown(f"Job **{p.get('job')}** · {p.get('service') or 'service'} · final price "
+                                f"**${p['amount']:,.2f}** (billed automatically: {allowed})".replace("$", chr(92) + "$"))
+                    st.caption(f"Technician notes: {p.get('completion_notes') or '-'}")
+                    st.markdown(summary(request.payload).replace("$", chr(92) + "$"))
+                with right:
+                    amount = st.number_input("Amount to bill, $", min_value=0.01, value=float(p["amount"]), step=1.0,
+                                             key=f"amount-{a.approval_id}")
+                    note = st.text_input("Note (required to decline)", key=f"note-{a.approval_id}")
+                    approve_col, reject_col = st.columns(2)
+                    if approve_col.button("Approve and send", key=f"approve-{a.approval_id}", type="primary"):
+                        try:
+                            result = approver_agent().decide(session, a.approval_id, user["username"], True,
+                                                             price=amount)
+                            session.commit()
+                            st.session_state["notice"] = (
+                                f"Invoice for ${amount:,.2f} sent" + (f" to {result['emailed']}." if result.get("emailed")
+                                                                      else "; a ticket asks the office to pass on the link."))
+                            st.rerun()
+                        except Exception as exc:
+                            session.rollback()
+                            st.error(f"Not sent: {exc}")
+                    if reject_col.button("Decline", key=f"reject-{a.approval_id}", disabled=not note):
+                        approver_agent().decide(session, a.approval_id, user["username"], False, note=note)
+                        session.commit()
+                        st.session_state["notice"] = "Invoice declined; a ticket asks the office to settle the bill."
+                        st.rerun()
+            continue
         service = (a.proposal or {}).get("service") or {}
         with st.expander(f"⏳ {a.reason.replace('_', ' ')} · request {a.request_id[:8].upper()} · waiting "
                          f"{waited.total_seconds() / 3600:.1f} h", expanded=True):
@@ -563,3 +655,19 @@ with views["Analytics"], sessions()() as session:
     e2.metric("Kept unchanged by dispatchers", f"{kept / (kept + changed):.0%}" if kept + changed else "-",
               help=f"{kept} kept, {changed} moved, reassigned or cancelled. Target: 9 out of 10.")
     e3.metric("Approvals waiting", pending_approvals)
+
+    # Phase 4: payment and review
+    st.markdown("**Payments and reviews (30 days)**")
+    invoices = list(session.scalars(select(Invoice).where(Invoice.tenant_id == tenant_id, Invoice.created_at >= since)))
+    paid = [i for i in invoices if i.status == "paid"]
+    open_invoices = [i for i in invoices if i.status in ("sent", "failed", "processing", "pending_approval")]
+    days_to_pay = sorted((i.paid_at - i.sent_at).total_seconds() / 86400 for i in paid if i.sent_at and i.paid_at)
+    reviews = list(session.scalars(select(Review).where(Review.tenant_id == tenant_id, Review.status == "submitted",
+                                                        Review.submitted_at >= since)))
+    f1, f2, f3, f4 = st.columns(4)
+    f1.metric("Collected", f"${sum(i.amount_cents for i in paid) / 100:,.2f}", help=f"{len(paid)} invoice(s) paid")
+    f2.metric("Unpaid", f"${sum(i.amount_cents for i in open_invoices) / 100:,.2f}",
+              help=f"{len(open_invoices)} invoice(s) sent, processing or awaiting approval")
+    f3.metric("Median days to pay", f"{days_to_pay[len(days_to_pay) // 2]:.1f}" if days_to_pay else "-")
+    f4.metric("Average rating", f"{sum(r.rating for r in reviews) / len(reviews):.1f} ★" if reviews else "-",
+              help=f"{len(reviews)} review(s); {sum(r.rating <= 3 for r in reviews)} rated 3 or lower (recovery)")

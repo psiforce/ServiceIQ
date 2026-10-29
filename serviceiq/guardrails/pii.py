@@ -3,9 +3,11 @@ import re
 
 PATTERNS = {
     "ssn": re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
-    "card": re.compile(r"\b(?:\d[ -]?){12,18}\d\b"),
+    # not joined to letters or digits, directly or by a dash (UUID groups like "04546345-7962-4013-a71c" pass Luhn)
+    "card": re.compile(r"(?<![0-9A-Za-z])(?<![0-9A-Za-z]-)(?:\d[ -]?){12,18}\d(?![0-9A-Za-z]|-[0-9A-Za-z])"),
     "email": re.compile(r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b"),
-    "phone": re.compile(r"(?<!\d)(?:\+?1[ .-]?)?\(?\d{3}\)?[ .-]?\d{3}[ .-]?\d{4}(?!\d)"),
+    # not inside a longer token: a run of digits in an ID (e.g. a UUID "…-2998268088f2") is not a phone number
+    "phone": re.compile(r"(?<![0-9A-Za-z])(?:\+?1[ .-]?)?\(?\d{3}\)?[ .-]?\d{3}[ .-]?\d{4}(?![0-9A-Za-z])"),
 }
 SENSITIVE = {"ssn", "card"}  # never acceptable in chat; customers are told not to share them
 

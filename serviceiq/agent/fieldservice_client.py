@@ -27,6 +27,7 @@ class FieldService(Protocol):
     def service_types(self, tenant_id: str) -> list[dict]: ...
     def availability(self, tenant_id: str, **params) -> list[dict]: ...
     def create_job(self, tenant_id: str, body: dict, idempotency_key: str) -> tuple[int, dict]: ...
+    def get_job(self, tenant_id: str, job_id: str) -> dict | None: ...
 
 
 class SlotTaken(RuntimeError):
@@ -105,6 +106,14 @@ class HttpFieldService:
     def create_job(self, tenant_id: str, body: dict, idempotency_key: str) -> tuple[int, dict]:
         return self.call(tenant_id, "POST", "/api/jobs", idempotency_key, json=body)
 
+    def get_job(self, tenant_id: str, job_id: str) -> dict | None:
+        code, body = self.call(tenant_id, "GET", f"/api/jobs/{job_id}")
+        if code == 404:
+            return None
+        if code != 200:
+            raise FieldServiceError(f"job lookup failed ({code})")
+        return body
+
     def call(self, tenant_id: str, method: str, path: str, idempotency_key: str | None = None,
              **kwargs) -> tuple[int, dict]:
         """Any platform endpoint (scheduling, technicians): (status code, JSON body)."""
@@ -155,10 +164,21 @@ class MemoryFieldService:
                 return 201, job
             if job["tenant_id"] == tenant_id and job["scheduled_start"] == body["scheduled_start"]:
                 return 409, {"detail": "technician already has a job at that time"}
+        prices = {t["id"]: t["default_price"] for t in self.service_types(tenant_id)}
         job = {"id": str(uuid.uuid4()), "identifier": f"JOB-{len(self.jobs) + 1}", "tenant_id": tenant_id,
-               "key": idempotency_key, "technician_name": "Dana Whitfield", **body}
+               "key": idempotency_key, "technician_name": "Dana Whitfield", "status": "scheduled",
+               "price": prices.get(body.get("service_type_id"), 0), "completion_notes": "", **body}
         self.jobs.append(job)
         return 201, job
+
+    def get_job(self, tenant_id: str, job_id: str) -> dict | None:
+        return next((j for j in self.jobs if j["id"] == job_id and j["tenant_id"] == tenant_id), None)
+
+    def complete_job(self, job_id: str, price: float | None = None, notes: str = "") -> dict:
+        """What a technician does in the Schedule tab (tests and evaluation)."""
+        job = next(j for j in self.jobs if j["id"] == job_id)
+        job |= {"status": "completed", "completion_notes": notes} | ({"price": price} if price is not None else {})
+        return job
 
     def find_or_create_customer(self, tenant_id: str, contact: dict, idempotency_key: str) -> str:
         if self.fail:

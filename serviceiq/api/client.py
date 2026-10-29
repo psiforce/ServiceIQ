@@ -58,3 +58,10 @@ class ServiceIQClient:
 
     def feedback(self, message_id: str, rating: str) -> None:
         self.http.post("/v1/feedback", json={"message_id": message_id, "rating": rating}).raise_for_status()
+
+    def review(self, conversation_id: str, rating: int, comment: str = "") -> dict:
+        """Phase 4: the customer's rating after a paid visit -> {status, message, public_link}."""
+        response = self.http.post("/v1/reviews", json={"conversation_id": conversation_id, "rating": rating,
+                                                       "comment": comment})
+        response.raise_for_status()
+        return response.json()

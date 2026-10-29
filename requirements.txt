@@ -31,6 +31,9 @@ sqlalchemy
 httpx
 psycopg[binary]
 
+# Payments (Phase 4): Stripe hosted Checkout + signed webhooks
+stripe
+
 # Google Cloud (document uploads on Cloud Storage)
 google-cloud-storage
 
@@ -41,5 +44,6 @@ typer
 # Observability
 langsmith
 
-# Testing
+# Testing and evaluation reports (spreadsheets)
+openpyxl
 pytest
