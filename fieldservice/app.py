@@ -3,16 +3,22 @@
 Ported from OpenFieldService's Hono routes (src/server/index.ts, MIT, (c) 2026 Clawnify) with the additions
 ServiceIQ needs: an API key per contractor (header `X-FSP-Key`; the key alone decides the org), every query
 scoped to that org, exact phone lookup, `Idempotency-Key` replay on writes so a retried request never creates
-a second customer or job, and (M16) technician working hours, an availability search and a double-booking
-check that locks the technician while a job is booked or moved.
+a second customer or job, (M16) technician working hours, an availability search and a double-booking
+check that locks the technician while a job is booked or moved, and (Phase 4) a signed `job.completed` event to
+ServiceIQ when a job is completed, so the customer can be invoiced.
 
 Run locally:  python -m fieldservice serve
 """
+import hashlib
+import hmac
+import json
 import logging
+import time as clock
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+import httpx
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
@@ -138,7 +144,31 @@ class JobUpdate(BaseModel):
     duration: int | None = Field(default=None, ge=15, le=12 * 60)
     notes: str | None = Field(default=None, max_length=4000)
     completion_notes: str | None = Field(default=None, max_length=4000)
+    price: float | None = Field(default=None, ge=0)  # the final price, entered when the job is completed
     allow_outside_hours: bool = False
+
+
+def notify_completed(settings: FSPSettings, org_id: str, job_id: str) -> None:
+    """Tell ServiceIQ a job was completed (HMAC over "<timestamp>.<body>"). Best effort, one retry: if it still
+    fails, ServiceIQ's hourly sweep finds the completed job anyway."""
+    if not (settings.serviceiq_webhook_url and settings.serviceiq_webhook_secret):
+        return
+    body = json.dumps({"event": "job.completed", "org_id": org_id, "job_id": job_id}).encode()
+    for attempt in (1, 2):
+        timestamp = str(int(clock.time()))
+        signature = hmac.new(settings.serviceiq_webhook_secret.encode(), timestamp.encode() + b"." + body,
+                             hashlib.sha256).hexdigest()
+        try:
+            response = httpx.post(settings.serviceiq_webhook_url, content=body, timeout=10, headers={
+                "Content-Type": "application/json", "X-ServiceIQ-Timestamp": timestamp,
+                "X-ServiceIQ-Signature": signature})
+            if response.status_code < 500:
+                if response.status_code >= 400:
+                    log.warning("ServiceIQ refused job.completed for %s: %s", job_id, response.status_code)
+                return
+        except httpx.HTTPError as exc:
+            log.warning("job.completed for %s not delivered (attempt %d): %s", job_id, attempt, type(exc).__name__)
+        clock.sleep(1)
 
 
 def _technician(t: Technician) -> dict:
@@ -446,9 +476,10 @@ def create_app(settings: FSPSettings | None = None, engine=None) -> FastAPI:
         return _job(job, org_tz(s), names(s, [job]))
 
     @app.put("/api/jobs/{job_id}")
-    def update_job(job_id: str, body: JobUpdate, s: OrgScope = Depends(scope)):
+    def update_job(job_id: str, body: JobUpdate, background: BackgroundTasks, s: OrgScope = Depends(scope)):
         tz = org_tz(s)
         job = own(s, Job, job_id, "job")
+        completing = body.status == "completed" and job.status != "completed"
         changes = body.model_dump(exclude_none=True, exclude={"allow_outside_hours"})
         technician_id = changes.get("technician_id", job.technician_id)
         start = utc(changes["scheduled_start"]) if "scheduled_start" in changes else utc(job.scheduled_start)
@@ -466,6 +497,8 @@ def create_app(settings: FSPSettings | None = None, engine=None) -> FastAPI:
         for field, value in changes.items():
             setattr(job, field, utc(value) if field == "scheduled_start" else value)
         s.session.commit()
+        if completing:  # sent after the response, so a slow ServiceIQ never holds up the technician
+            background.add_task(notify_completed, settings, s.org_id, job.id)
         return _job(job, tz, names(s, [job]))
 
     @app.get("/api/schedule")

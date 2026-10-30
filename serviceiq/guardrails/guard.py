@@ -26,8 +26,9 @@ log = logging.getLogger(__name__)
 
 CANNED = {
     "sensitive_data": ("For your security, please don't share card numbers or Social Security numbers in chat. "
-                       "Payments are never taken here, and financing applications go through the lender's secure "
-                       "application. Our team can help by phone at {office_phone}."),
+                       "Payments are never taken here: after your visit you'll get a secure payment link by email, "
+                       "and financing applications go through the lender's secure application. Our team can help by "
+                       "phone at {office_phone}."),
     "refuse_unsafe": ("I can't help with bypassing safety devices or other hazardous repairs. Those controls protect "
                       "you from fire and carbon monoxide. A trained technician should diagnose the problem; call "
                       "{company_name} at {office_phone} to schedule a visit."),

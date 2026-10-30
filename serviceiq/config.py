@@ -77,6 +77,15 @@ class Settings(BaseSettings):
     fsp_api_keys: str = ""            # JSON {"tenant": "key"}; else var/dev_fsp_keys.json
     fsp_database_url: str = f"sqlite:///{(PROJECT_ROOT / 'var' / 'fieldservice.db').as_posix()}"
     fsp_id_token: bool = False        # attach a Google ID token (private Cloud Run service)
+    fsp_webhook_secret: SecretStr | None = None  # HMAC key for the platform's job.completed events (/v1/events/fieldservice)
+
+    # Phase 4 (M19+): invoice, payment and review after the job is completed
+    agent_payments_enabled: bool = True  # false = record the completion, the office bills by hand
+    stripe_secret_key: SecretStr | None = None      # empty = an in-memory payment page (local dev and evaluation)
+    stripe_webhook_secret: SecretStr | None = None  # verifies /v1/payments/stripe
+    payment_reminder_days: int = 3    # one reminder after this many days unpaid, a ticket after twice that
+    review_reminder_days: int = 7     # one reminder, then the review request is closed after twice that
+    public_base_url: str = "http://localhost:8501"  # customer chat: payment and review links come back here
 
     # Email notifications for escalations; without SMTP_HOST, emails are written to var/outbox/
     smtp_host: str = ""

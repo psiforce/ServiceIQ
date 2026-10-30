@@ -11,15 +11,20 @@ Every customer message runs one pass through the graph:
          │                  within policy -> offer up to 3 free times   (stage choosing_slot)
          │                  needs approval -> Approval row, admins emailed (stage awaiting_approval)
          ├─ choose     -> the customer picks a time -> job booked in the platform, confirmation email
+         ├─ payment    -> (after the job) "how do I pay?" -> the secure payment link again, never card details
          └─ extract -> eligibility -> next_step   (collect details, then show the summary to confirm)
 
 An approver's decision arrives from the admin console through `Agent.decide`, which books (or declines) and
 moves the conversation's saved state on, so the customer can keep chatting while a request waits.
 
+Phase 4 (postservice.PostService): events after the visit (job completed, payment, rating) move the same
+conversation through awaiting_payment -> paid -> review_requested -> reviewed | recovery.
+
 The model only extracts details; the next step, eligibility, policy and booking are decided in code. State that
 must survive between messages (stage, draft, contact, offered slots) is checkpointed per conversation;
 per-message context (database session, the guard verdict, the reply being built) is passed at run time.
 """
+import re
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -33,6 +38,7 @@ from serviceiq import observability
 from serviceiq.agent import eligibility, intake, operations, policy
 from serviceiq.agent.checkpoint import make_checkpointer
 from serviceiq.agent.fieldservice_client import FieldService, SlotTaken, make_field_service
+from serviceiq.agent.postservice import PostService, dollars, payment_options
 from serviceiq.agent.schema import ServiceRequestV1, missing_contact, missing_fields, summary
 from serviceiq.agent.tools import audited
 from serviceiq.assistant import GUARD_STATUS
@@ -49,10 +55,21 @@ CHOOSING = "choosing_slot"             # times offered, waiting for the customer
 # No heat or cooling in extreme weather: the safety script is shown, and the visit is still booked (as urgent).
 # Every other emergency (gas, CO, fire, electrical) ends the conversation's intake.
 COMFORT_EMERGENCIES = {"no_heat_extreme", "no_cool_extreme"}
+POST_SERVICE = ("awaiting_payment", "paid", "review_requested", "reviewed", "recovery")  # Phase 4 stages
+AFTER_BOOKING = ("booked", "awaiting_approval", "submitted") + POST_SERVICE  # a request is already with the office
+PAY = re.compile(r"\b(pay|paying|paid|payment|invoice|bill|billed|zelle|receipt)\b", re.IGNORECASE)
+# a booked visit to move or cancel: the office does it (the agent can't change jobs), never a new intake
+CHANGE = re.compile(r"\b(reschedul\w*|move (my|the|our) (appointment|visit|booking)|change (my|the|our) "
+                    r"(appointment|visit|booking|time|date|day)|(another|different) (day|time|date)|"
+                    r"cancel (my|the|our|this) (appointment|visit|booking|job))\b", re.IGNORECASE)
+# a complaint about the bill: a person reviews it, never just the payment link again
+DISPUTE = re.compile(r"\b(wrong|incorrect|overcharg\w*|dispute|refund|too (much|high)|charged (me )?twice|"
+                     r"didn'?t (fix|work)|not fixed|mistake)\b", re.IGNORECASE)
 
 
 class AgentState(TypedDict, total=False):
     # idle | collecting | confirming | choosing_slot | awaiting_approval | booked | submitted | closed
+    # Phase 4: awaiting_payment | paid | review_requested | reviewed | recovery
     stage: str
     draft: dict              # service request fields (no contact details)
     contact: dict            # name, phone, email, street, city, zip: kept only until submission
@@ -113,14 +130,15 @@ def _ctx(config) -> TurnContext:
     return config["configurable"]["ctx"]
 
 
-class Agent:
+class Agent(PostService):
     def __init__(self, settings: Settings, assistant=None, client=None, fsp: FieldService | None = None,
-                 checkpointer=None):
+                 checkpointer=None, payments=None):
         self.settings = settings
         if client is None:
             observability.configure(settings)
             client = observability.wrap_client(settings, openai_client(settings))
-        self.client, self._assistant, self._fsp = client, assistant, fsp
+        self.client, self._assistant, self._fsp, self._payments = client, assistant, fsp, payments
+        self.callbacks = observability.agent_callbacks(settings)  # redacted LangSmith traces, when enabled
         self.checkpointer = checkpointer or make_checkpointer(settings)
         self.graph = self._build().compile(checkpointer=self.checkpointer)
 
@@ -140,12 +158,17 @@ class Agent:
     # ------------------------------------------------------------ entry points
     def handle(self, session: Session, tenant_id: str, conversation_id: str, message: str,
                contact: dict | None = None, confirm: bool | None = None,
-               history: list[tuple[str, str]] | None = None) -> AgentTurn:
+               history: list[tuple[str, str]] | None = None, trace_metadata: dict | None = None) -> AgentTurn:
+        """One customer message. `trace_metadata` (e.g. an evaluation case ID) is attached to the LangSmith trace."""
         started = time.perf_counter()
         ctx = TurnContext(session=session, tenant_id=tenant_id, conversation_id=conversation_id,
                           profile=load_profile(self.settings.data_dir, tenant_id), message=message,
                           contact_in=contact, confirm=confirm, history=history or [])
         config = {"configurable": {"thread_id": conversation_id, "ctx": ctx}}
+        if self.callbacks:
+            config |= {"callbacks": self.callbacks, "run_name": "serviceiq.agent.turn",
+                       "metadata": {"tenant_id": tenant_id, "conversation_id": conversation_id,
+                                    **(trace_metadata or {})}}
         self.graph.invoke({"last_turn_at": datetime.now(timezone.utc).isoformat()}, config)
         out = ctx.out
         if ctx.safety_message:  # the safety steps come first and the P1 ticket stands, whatever intake replied
@@ -161,6 +184,12 @@ class Agent:
     def stage(self, conversation_id: str) -> str:
         return self.graph.get_state({"configurable": {"thread_id": conversation_id}}).values.get("stage", "idle")
 
+    def close(self) -> None:
+        """Close the checkpointer's connection pool (short-lived processes such as the hourly sweep)."""
+        conn = getattr(self.checkpointer, "conn", None)
+        if conn is not None and hasattr(conn, "close"):
+            conn.close()
+
     def forget(self, conversation_id: str) -> None:
         """Delete a conversation's saved state (retention purge)."""
         self.checkpointer.delete_thread(conversation_id)
@@ -169,18 +198,20 @@ class Agent:
     def _build(self) -> StateGraph:
         g = StateGraph(AgentState)
         for name in ("guard", "emergency", "blocked", "escalate", "answer", "extract", "eligibility", "next_step",
-                     "submit", "choose"):
+                     "submit", "choose", "payment", "change_request", "billing_dispute"):
             g.add_node(name, getattr(self, f"_{name}"))
         g.add_edge(START, "guard")
         g.add_conditional_edges("guard", self._route, ["emergency", "blocked", "escalate", "answer", "extract",
-                                                       "submit", "choose"])
+                                                       "submit", "choose", "payment", "change_request",
+                                                       "billing_dispute"])
         g.add_conditional_edges("emergency", lambda s, config: "extract" if _ctx(config).safety_message else END,
                                 ["extract", END])
         g.add_conditional_edges("extract", lambda s, config: "submit" if _ctx(config).submit else "eligibility",
                                 ["submit", "eligibility"])
         g.add_conditional_edges("eligibility", lambda s: END if s.get("stage") == "closed" else "next_step",
                                 ["next_step", END])
-        for name in ("blocked", "escalate", "answer", "next_step", "submit", "choose"):
+        for name in ("blocked", "escalate", "answer", "next_step", "submit", "choose", "payment", "change_request",
+                     "billing_dispute"):
             g.add_edge(name, END)
         return g
 
@@ -209,6 +240,12 @@ class Agent:
             return "submit"
         if stage == CHOOSING:
             return "choose"
+        if stage in AFTER_BOOKING and CHANGE.search(ctx.message):
+            return "change_request"
+        if stage in POST_SERVICE and DISPUTE.search(ctx.message):
+            return "billing_dispute"
+        if stage in POST_SERVICE and PAY.search(ctx.message):
+            return "payment"
         if stage in ACTIVE or ctx.contact_in or verdict.intent == "service_request":
             return "extract"
         return "answer"
@@ -528,6 +565,55 @@ class Agent:
         out.log_answer = redact(out.answer)
         return {"stage": "booked"}
 
+    def _change_request(self, state: AgentState, config) -> dict:
+        """Move or cancel a visit that is already booked or with the office: a person does it (P3 ticket)."""
+        ctx, out = _ctx(config), _ctx(config).out
+        request = ctx.session.get(ServiceRequest, state.get("request_id")) if state.get("request_id") else None
+        reference = f" (request {request.request_id[:8].upper()})" if request else ""
+        out.status = "escalated"
+        out.escalation = {"priority": "P3", "reason": f"customer asks to reschedule or cancel a booked visit{reference}"}
+        out.answer = (f"I can't change booked visits myself, so I've asked the {ctx.profile.company_name} office to "
+                      f"contact you to move or cancel it{reference}. You can also call {ctx.profile.office_phone} "
+                      f"({ctx.profile.business_hours}).")
+        return {}
+
+    def _billing_dispute(self, state: AgentState, config) -> dict:
+        """A complaint about the bill after the visit: a person reviews the invoice with the customer (P3 ticket)."""
+        ctx, out = _ctx(config), _ctx(config).out
+        invoice = self.payment_status(ctx.session, ctx.tenant_id, ctx.conversation_id)
+        reference = f" for request {invoice.request_id[:8].upper()}" if invoice else ""
+        out.status = "escalated"
+        out.escalation = {"priority": "P3", "reason": f"billing question or dispute{reference}: review the invoice "
+                                                      "with the customer"}
+        out.answer = (f"I'm sorry about that. I've passed this to the {ctx.profile.company_name} office so someone can "
+                      f"go over the invoice{reference} with you. You can also call {ctx.profile.office_phone} "
+                      f"({ctx.profile.business_hours}).")
+        return {}
+
+    def _payment(self, state: AgentState, config) -> dict:
+        """After the visit: how to pay, from the invoice itself. Card details are never asked for in chat."""
+        ctx, out = _ctx(config), _ctx(config).out
+        invoice = self.payment_status(ctx.session, ctx.tenant_id, ctx.conversation_id)
+        phone = f"{ctx.profile.office_phone} ({ctx.profile.business_hours})"
+        out.status = "payment"
+        if invoice is None or invoice.status == "pending_approval":
+            out.answer = ("The office is finalising your invoice. You'll get an email with a secure payment link "
+                          f"shortly. Questions about the bill? Call {phone}.")
+        elif invoice.status == "paid":
+            out.answer = f"Your payment of {dollars(invoice.amount_cents)} was received. Thank you!"
+        elif invoice.status == "processing":
+            out.answer = ("Your bank payment is on its way; bank transfers usually take a few business days. "
+                          "There's nothing more you need to do.")
+        elif invoice.status == "void":
+            out.answer = f"The office will contact you about this bill. You can also call {phone}."
+        else:
+            reference = invoice.request_id[:8].upper()
+            out.answer = "\n\n".join([
+                f"Your invoice is {dollars(invoice.amount_cents)} (reference {reference}). You can pay securely here: "
+                f"{invoice.payment_url}", payment_options(ctx.profile, reference),
+                "For your security, please don't type card or bank details in chat."])
+        return {}
+
     def _confirm_to_customer(self, session, tenant_id, profile, request, booked, service, price_line) -> str | None:
         """Email the confirmation when the customer gave an email address (looked up in the platform)."""
         try:
@@ -551,6 +637,8 @@ class Agent:
         approval = session.get(Approval, approval_id)
         if approval is None or approval.status != "pending":
             raise ValueError("approval not found or already decided")
+        if (approval.proposal or {}).get("kind") == "invoice":  # Phase 4: a final price outside the range
+            return self.decide_invoice(session, approval, approver, approve, price=price, note=note)
         request = session.get(ServiceRequest, approval.request_id)
         profile = load_profile(self.settings.data_dir, approval.tenant_id)
         service = (approval.proposal or {}).get("service")

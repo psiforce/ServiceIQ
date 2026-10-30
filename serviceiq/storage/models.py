@@ -156,7 +156,8 @@ class ServiceRequest(Base):
     customer_ref: Mapped[str] = mapped_column(String(64))  # customer ID in the field-service platform
     payload: Mapped[dict] = mapped_column(JSON)            # equipment, symptoms, urgency, windows; no contact details
     schema_version: Mapped[str] = mapped_column(String(8), default="1.0")
-    status: Mapped[str] = mapped_column(String(16), default="new")  # new|needs_approval|contacted|scheduled|closed
+    # new | needs_approval | contacted | scheduled | closed; Phase 4: completed | invoiced | paid | reviewed
+    status: Mapped[str] = mapped_column(String(16), default="new")
     staff_notes: Mapped[str | None] = mapped_column(Text)
     job_ref: Mapped[str | None] = mapped_column(String(64))  # the booked job in the field-service platform (M16)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
@@ -207,3 +208,44 @@ class Approval(Base):
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     escalated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+
+
+class Invoice(Base):
+    """The bill for a completed job (Phase 4). One per service request: the unique key makes a repeated
+    completion event (webhook retry, sweep) unable to bill twice. No card or bank details are stored."""
+    __tablename__ = "invoices"
+    invoice_id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.tenant_id"), index=True)
+    request_id: Mapped[str] = mapped_column(ForeignKey("service_requests.request_id"), unique=True)
+    job_ref: Mapped[str] = mapped_column(String(64))
+    amount_cents: Mapped[int] = mapped_column(Integer)
+    currency: Mapped[str] = mapped_column(String(3), default="usd")
+    # pending_approval | sent | processing (ACH) | paid | failed | void
+    status: Mapped[str] = mapped_column(String(16), default="pending_approval")
+    method: Mapped[str | None] = mapped_column(String(16))  # card | ach | cashapp | online | zelle | check | cash
+    provider_session_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    payment_url: Mapped[str | None] = mapped_column(String(1000))
+    failures: Mapped[int] = mapped_column(Integer, default=0)
+    recorded_by: Mapped[str | None] = mapped_column(String(100))  # the admin who recorded an off-line payment
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reminded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    escalated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+
+
+class Review(Base):
+    """A review request and the customer's answer (Phase 4). The public review link is shown to every reviewer,
+    whatever the rating; a rating of 3 or less also opens a recovery ticket."""
+    __tablename__ = "reviews"
+    review_id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.tenant_id"), index=True)
+    request_id: Mapped[str] = mapped_column(ForeignKey("service_requests.request_id"), unique=True)
+    status: Mapped[str] = mapped_column(String(16), default="requested")  # requested | submitted | closed
+    rating: Mapped[int | None] = mapped_column(Integer)            # 1-5
+    comment: Mapped[str | None] = mapped_column(Text)              # PII-redacted
+    public_link_shown: Mapped[bool] = mapped_column(Boolean, default=False)
+    recovery_escalation_id: Mapped[str | None] = mapped_column(String(32))
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    reminded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

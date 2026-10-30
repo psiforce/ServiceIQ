@@ -1,10 +1,16 @@
-"""Approval timeouts (Phase 3): run hourly (Cloud Scheduler -> Cloud Run job, or the compose `sweeper`).
+"""Hourly sweeps (Cloud Scheduler -> Cloud Run job, or the compose `sweeper`).
 
-An approval still pending after its policy's timeout (24 hours by default) is escalated once:
+Approval timeouts (Phase 3): an approval still pending after its policy's timeout (24 hours by default) is
+escalated once:
   - an urgent reminder email to the company's admins (the office escalation address)
   - a P2 ticket in the inbox, so a person calls the customer
   - an email to the customer, when they gave an address, saying the office will call
 The approval stays pending: an admin can still approve or decline it afterwards.
+
+Phase 4:
+  - completions: a job completed in the platform whose event never arrived is billed as if it had
+  - payments: one reminder after PAYMENT_REMINDER_DAYS unpaid, then a P3 ticket after as many days again
+  - reviews: one reminder after REVIEW_REMINDER_DAYS, then the request is closed without a review
 """
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
@@ -13,10 +19,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from serviceiq.agent.fieldservice_client import FieldService
+from serviceiq.agent.postservice import invoice_email, review_email
 from serviceiq.agent.schema import summary
 from serviceiq.config import Settings
 from serviceiq.escalation import notify, open_ticket, send
-from serviceiq.storage.models import Approval, ApprovalPolicy, Conversation, ServiceRequest
+from serviceiq.storage.models import Approval, ApprovalPolicy, Conversation, Invoice, Review, ServiceRequest
 from serviceiq.tenants import load_profile
 
 DEFAULT_TIMEOUT_HOURS = 24
@@ -83,5 +90,73 @@ def sweep_approvals(session: Session, settings: Settings, fsp: FieldService, now
         approval.escalated_at = now
         results.append({"approval_id": approval.approval_id, "tenant_id": approval.tenant_id, "waited_hours":
                         round(waited, 1), "ticket_id": ticket_id, "customer_emailed": bool(emailed)})
+    session.commit()
+    return results
+
+
+# ---------------------------------------------------------------- Phase 4
+def sweep_completions(session: Session, agent) -> list[dict]:
+    """Booked jobs the platform shows as completed but ServiceIQ never heard about (webhook lost or API down)."""
+    results = []
+    for request in list(session.scalars(select(ServiceRequest).where(ServiceRequest.status == "scheduled",
+                                                                     ServiceRequest.job_ref.is_not(None)))):
+        try:
+            job = agent.fsp.get_job(request.tenant_id, request.job_ref)
+            if not job or job.get("status") != "completed":
+                continue
+            result = agent.on_job_completed(session, request.tenant_id, request.job_ref)
+            session.commit()  # one request at a time: a failure below never undoes an invoice already sent
+        except Exception as exc:  # one bad job must not stop the sweep
+            session.rollback()
+            result = {"status": "error", "error": type(exc).__name__}
+        results.append({"tenant_id": request.tenant_id, "request_id": request.request_id} | result)
+    return results
+
+
+def sweep_payments(session: Session, settings: Settings, agent, now: datetime | None = None) -> list[dict]:
+    now = now or datetime.now(timezone.utc)
+    wait = timedelta(days=settings.payment_reminder_days)
+    results = []
+    for invoice in session.scalars(select(Invoice).where(Invoice.status.in_(("sent", "failed")),
+                                                         Invoice.escalated_at.is_(None))):
+        request = session.get(ServiceRequest, invoice.request_id)
+        reference = request.request_id[:8].upper()
+        if invoice.reminded_at is None and now - _aware(invoice.sent_at) >= wait:
+            email = agent._customer_email(invoice.tenant_id, request)
+            if email:
+                profile = load_profile(settings.data_dir, invoice.tenant_id)
+                send(settings, invoice_email(settings, profile, email, invoice, reference,
+                                             note="A friendly reminder: this invoice is still open."),
+                     f"REMINDER-{invoice.invoice_id}")
+            invoice.reminded_at = now
+            results.append({"invoice_id": invoice.invoice_id, "action": "reminded", "emailed": bool(email)})
+        elif invoice.reminded_at is not None and now - _aware(invoice.reminded_at) >= wait:
+            ticket_id = agent._ticket(session, request, "P3", f"invoice {reference} unpaid after a reminder: call "
+                                                              "the customer")
+            invoice.escalated_at = now
+            results.append({"invoice_id": invoice.invoice_id, "action": "ticket", "ticket_id": ticket_id})
+    session.commit()
+    return results
+
+
+def sweep_reviews(session: Session, settings: Settings, agent, now: datetime | None = None) -> list[dict]:
+    now = now or datetime.now(timezone.utc)
+    wait = timedelta(days=settings.review_reminder_days)
+    results = []
+    for review in session.scalars(select(Review).where(Review.status == "requested")):
+        request = session.get(ServiceRequest, review.request_id)
+        if review.reminded_at is None and now - _aware(review.requested_at) >= wait:
+            email = agent._customer_email(review.tenant_id, request)
+            if email and request.conversation_id:
+                profile = load_profile(settings.data_dir, review.tenant_id)
+                send(settings, review_email(settings, profile, email, agent._link(
+                    tenant=review.tenant_id, conversation=request.conversation_id, review=1)),
+                     f"REVIEW-REMINDER-{review.review_id}")
+            review.reminded_at = now
+            results.append({"review_id": review.review_id, "action": "reminded", "emailed": bool(email)})
+        elif review.reminded_at is not None and now - _aware(review.reminded_at) >= wait:
+            review.status = "closed"
+            agent._move(request.conversation_id, "closed")
+            results.append({"review_id": review.review_id, "action": "closed"})
     session.commit()
     return results

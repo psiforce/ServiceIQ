@@ -68,6 +68,7 @@ def main():
     fsp_keys = stable("fsp_keys.json", lambda: json.dumps(
         {t: f"fsp_{t}_{secrets.token_urlsafe(24)}" for t in TENANTS}, indent=2))
     fsp_db_password = stable("fsp_db_password", lambda: secrets.token_urlsafe(24))
+    webhook_secret = stable("fsp_webhook_secret", lambda: secrets.token_urlsafe(32))  # Phase 4 job.completed events
     admin_creds = stable("admin_credentials.json", lambda: json.dumps(
         {u: {"tenant": t, "role": r, "password": secrets.token_urlsafe(14)} for u, (t, r) in ADMINS.items()}, indent=2))
 
@@ -81,6 +82,10 @@ def main():
         "fsp-database-url": f"postgresql+psycopg://fsp_app:{fsp_db_password}@/fieldservice?host={socket}",
         "fsp-api-keys": json.dumps(json.loads(fsp_keys)),
         "admin-passwords": json.dumps({u: c["password"] for u, c in json.loads(admin_creds).items()}),
+        # Phase 4: one HMAC key, read by the API (FSP_WEBHOOK_SECRET) and the platform (SERVICEIQ_WEBHOOK_SECRET)
+        "fsp-webhook-secret": webhook_secret,
+        "stripe-secret-key": env.get("STRIPE_SECRET_KEY", ""),
+        "stripe-webhook-secret": env.get("STRIPE_WEBHOOK_SECRET", ""),
     }
     for name, value in values.items():
         if not value:

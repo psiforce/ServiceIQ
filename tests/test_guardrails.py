@@ -108,3 +108,13 @@ def test_live_guard_eval_all_cases():
     cases, _ = run_guard_eval(DATA, openai_client(settings), settings.guard_model)
     failed = [(c.case_id, c.result.action) for c in cases if not c.passed]
     assert not failed
+
+
+def test_ids_in_the_audit_log_are_not_mistaken_for_phones_or_cards():
+    # found in the Phase 4 evaluation: ~1.5% of job UUIDs lost digits to "[PHONE]" / "[CARD]" in ToolCall rows
+    ids = ["b6521f3f-b501-4967-a96a-2998268088f2", "3e799362-3961-43d9-ae89-ad8bd1d71577",
+           "04546345-7962-4013-a71c-fff8b5049e10", "0a27728c-d5c1-4bc3-9121-427253953673"]
+    assert [redact(i) for i in ids] == ids
+    assert redact("job 6b0ec5f435ea43a8b3212686212b0697 for 555-010-4477") == \
+        "job 6b0ec5f435ea43a8b3212686212b0697 for [PHONE]"
+    assert redact("card 4111-1111-1111-1111.") == "card [CARD]."

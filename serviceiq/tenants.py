@@ -13,6 +13,10 @@ class TenantProfile:
     emergency_phone: str | None
     business_hours: str
     escalation_email: str
+    # Phase 4: payment methods offered on the Stripe page, Zelle details for invoices, the public review page
+    payment_methods: tuple[str, ...] = ("card", "us_bank_account", "cashapp")
+    zelle_handle: str | None = None
+    review_url: str | None = None
 
 
 @lru_cache

@@ -40,6 +40,34 @@ def _summarize_output(output) -> dict:
     return data
 
 
+CONTACT_KEYS = {"contact", "contact_in", "name", "phone", "email", "street", "address", "city"}
+
+
+def redact_payload(value):
+    """What an agent trace may contain: contact fields dropped, every string PII-redacted (graph state, node
+    inputs and outputs). Used as the LangSmith client's hide_inputs / hide_outputs."""
+    if isinstance(value, dict):
+        return {k: ("[REDACTED]" if k in CONTACT_KEYS and v else redact_payload(v)) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [redact_payload(v) for v in value]
+    if isinstance(value, str):
+        return redact(value)
+    return value
+
+
+def agent_callbacks(settings: Settings) -> list | None:
+    """A LangSmith tracer for the agent graph whose client redacts every run before upload (LangGraph traces each
+    node with the full state, which holds the customer's contact details). Passing it also stops LangChain from
+    adding its own unredacted tracer from the environment."""
+    if not tracing_enabled(settings):
+        return None
+    from langchain_core.tracers import LangChainTracer
+    from langsmith import Client
+    client = Client(api_key=settings.langsmith_api_key.get_secret_value(), hide_inputs=redact_payload,
+                    hide_outputs=redact_payload)
+    return [LangChainTracer(project_name=settings.langsmith_project, client=client)]
+
+
 def trace_ask(settings: Settings, ask):
     """Wrap Assistant.ask so each customer turn becomes one LangSmith trace."""
     if not tracing_enabled(settings):
